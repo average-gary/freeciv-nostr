@@ -82,6 +82,7 @@
 #include "mapimg.h"
 #include "modpack.h"
 #include "nation.h"
+#include "packet_trace.h"
 #include "packets.h"
 #include "player.h"
 #include "research.h"
@@ -1970,6 +1971,9 @@ void fc__noreturn server_quit(void)
 
   save_system_close();
 
+  /* Finalize packet tracing before cleanup */
+  packet_trace_done();
+
   if (game.server.save_timer != nullptr) {
     timer_destroy(game.server.save_timer);
     game.server.save_timer = nullptr;
@@ -3133,6 +3137,9 @@ static void srv_prepare(void)
   con_log_init(srvarg.log_filename, srvarg.loglevel,
                srvarg.fatal_assertions);
   /* Logging available after this point */
+
+  /* Initialize packet tracing (checks FREECIV_PACKET_TRACE_DIR env var) */
+  packet_trace_init(NULL);
 
   server_open_socket();
 
