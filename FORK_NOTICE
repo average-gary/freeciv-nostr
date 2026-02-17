@@ -1,0 +1,10 @@
+This repository is a fork of Freeciv.
+
+Original project: https://github.com/freeciv/freeciv
+
+This fork is licensed under the same GNU General Public License v2 as the
+original project.
+
+Modifications in this fork replace the centralized client-server networking
+layer with decentralized peer-to-peer networking using Nostr (for
+cryptographic game state verification) and Iroh (for direct P2P transport).
