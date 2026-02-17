@@ -44,6 +44,7 @@
 #include "map.h"
 
 #include "packets.h"
+#include "packet_trace.h"
 
 #ifdef USE_COMPRESSION
 #include <zlib.h>
@@ -219,6 +220,11 @@ int send_packet_data(struct connection *pc, unsigned char *data, int len,
   log_packet("sending packet type=%s(%d) len=%d to %s",
              packet_name(packet_type), packet_type, len,
              is_server() ? pc->username : "server");
+
+  /* Record packet trace if tracing is active (zero-cost check when off) */
+  if (packet_trace_is_active()) {
+    packet_trace_record_send(packet_type, data, len, pc->id);
+  }
 
   if (!is_server()) {
     pc->client.last_request_id_used =
