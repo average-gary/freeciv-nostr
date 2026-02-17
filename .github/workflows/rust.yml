@@ -1,0 +1,32 @@
+name: rust
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Check formatting
+        working-directory: rust
+        run: cargo fmt --check
+
+      - name: Clippy lints
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: rust
+        run: cargo test
+
+      - name: Build release
+        working-directory: rust
+        run: cargo build --release

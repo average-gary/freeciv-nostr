@@ -1,0 +1,15 @@
+[package]
+name = "freeciv-nostr-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+freeciv-nostr-core = { path = "../freeciv-nostr-core" }
+iroh = { workspace = true }
+iroh-gossip = { workspace = true }
+iroh-blobs = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
