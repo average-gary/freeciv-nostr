@@ -1,0 +1,15 @@
+[package]
+name = "freeciv-nostr-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+freeciv-nostr-core = { path = "../freeciv-nostr-core" }
+freeciv-nostr-net = { path = "../freeciv-nostr-net" }
+freeciv-nostr-verify = { path = "../freeciv-nostr-verify" }
+libc = "0.2"
