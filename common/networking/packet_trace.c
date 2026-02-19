@@ -77,21 +77,40 @@ static uint64_t get_timestamp_usec(void)
 }
 
 /**********************************************************************//**
-  Write a uint16 to the trace file in little-endian byte order.
+  Disable tracing due to a write error. Logs the error and closes
+  the trace file so no further writes are attempted.
 **************************************************************************/
-static void write_uint16(FILE *fp, uint16_t val)
+static void trace_disable_on_error(void)
+{
+  log_error("packet_trace: write failed, disabling trace");
+  trace_active = FALSE;
+  if (trace_file != NULL) {
+    fclose(trace_file);
+    trace_file = NULL;
+  }
+}
+
+/**********************************************************************//**
+  Write a uint16 to the trace file in little-endian byte order.
+  Returns TRUE on success, FALSE on write failure.
+**************************************************************************/
+static bool write_uint16(FILE *fp, uint16_t val)
 {
   unsigned char buf[2];
 
   buf[0] = (unsigned char)(val & 0xFF);
   buf[1] = (unsigned char)((val >> 8) & 0xFF);
-  fwrite(buf, 1, 2, fp);
+  if (fwrite(buf, 1, 2, fp) != 2) {
+    return FALSE;
+  }
+  return TRUE;
 }
 
 /**********************************************************************//**
   Write a uint32 to the trace file in little-endian byte order.
+  Returns TRUE on success, FALSE on write failure.
 **************************************************************************/
-static void write_uint32(FILE *fp, uint32_t val)
+static bool write_uint32(FILE *fp, uint32_t val)
 {
   unsigned char buf[4];
 
@@ -99,13 +118,17 @@ static void write_uint32(FILE *fp, uint32_t val)
   buf[1] = (unsigned char)((val >> 8) & 0xFF);
   buf[2] = (unsigned char)((val >> 16) & 0xFF);
   buf[3] = (unsigned char)((val >> 24) & 0xFF);
-  fwrite(buf, 1, 4, fp);
+  if (fwrite(buf, 1, 4, fp) != 4) {
+    return FALSE;
+  }
+  return TRUE;
 }
 
 /**********************************************************************//**
   Write a uint64 to the trace file in little-endian byte order.
+  Returns TRUE on success, FALSE on write failure.
 **************************************************************************/
-static void write_uint64(FILE *fp, uint64_t val)
+static bool write_uint64(FILE *fp, uint64_t val)
 {
   unsigned char buf[8];
   int i;
@@ -113,7 +136,10 @@ static void write_uint64(FILE *fp, uint64_t val)
   for (i = 0; i < 8; i++) {
     buf[i] = (unsigned char)((val >> (i * 8)) & 0xFF);
   }
-  fwrite(buf, 1, 8, fp);
+  if (fwrite(buf, 1, 8, fp) != 8) {
+    return FALSE;
+  }
+  return TRUE;
 }
 
 /**********************************************************************//**
@@ -233,16 +259,28 @@ static void packet_trace_record(enum packet_type type,
 
   timestamp = get_timestamp_usec();
 
-  /* Write record header */
-  write_uint16(trace_file, (uint16_t)type);
-  write_uint32(trace_file, (uint32_t)len);
-  write_uint32(trace_file, (uint32_t)connection_id);
-  fputc((unsigned char)direction, trace_file);
-  write_uint64(trace_file, timestamp);
+  /* Write record header, disabling tracing on any write failure */
+  if (!write_uint16(trace_file, (uint16_t)type)
+      || !write_uint32(trace_file, (uint32_t)len)
+      || !write_uint32(trace_file, (uint32_t)connection_id)) {
+    trace_disable_on_error();
+    return;
+  }
+  if (fputc((unsigned char)direction, trace_file) == EOF) {
+    trace_disable_on_error();
+    return;
+  }
+  if (!write_uint64(trace_file, timestamp)) {
+    trace_disable_on_error();
+    return;
+  }
 
   /* Write raw packet data */
   if (data != NULL && len > 0) {
-    fwrite(data, 1, len, trace_file);
+    if (fwrite(data, 1, len, trace_file) != (size_t)len) {
+      trace_disable_on_error();
+      return;
+    }
   }
 
   /* Update counters */
@@ -250,6 +288,11 @@ static void packet_trace_record(enum packet_type type,
   trace_total_bytes += len;
   trace_type_count[type]++;
   trace_type_bytes[type] += len;
+
+  /* Periodic flush every 1024 packets to limit data loss on crash */
+  if ((trace_packet_count & 0x3FF) == 0) {
+    fflush(trace_file);
+  }
 }
 
 /**********************************************************************//**
