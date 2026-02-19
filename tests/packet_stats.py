@@ -32,8 +32,14 @@ from collections import defaultdict
 TRACE_MAGIC = 0x46435054  # "FCPT"
 TRACE_VERSION = 1
 
-# Record header: uint16 + uint32 + uint32 + uint8 + uint64 = 19 bytes
-RECORD_HEADER_FORMAT = '<HIBIq'  # Note: we handle this manually for clarity
+# Record header field order (matching C write order in packet_trace.c):
+#   uint16  packet_type      (H)
+#   uint32  data_len         (I)
+#   uint32  connection_id    (I)
+#   uint8   direction        (B)
+#   uint64  timestamp_usec   (Q)
+# Total: 2 + 4 + 4 + 1 + 8 = 19 bytes
+RECORD_HEADER_FORMAT = '<HIIBQ'
 RECORD_HEADER_SIZE = 19
 
 

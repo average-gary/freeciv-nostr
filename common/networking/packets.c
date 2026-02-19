@@ -538,6 +538,12 @@ void *get_packet_from_connection_raw(struct connection *pc,
              packet_name(utype.type), utype.itype, whole_packet_len,
              is_server() ? pc->username : "server");
 
+  /* Record packet trace if tracing is active (zero-cost check when off) */
+  if (packet_trace_is_active()) {
+    packet_trace_record_recv(utype.type, pc->buffer->data, whole_packet_len,
+                             pc->id);
+  }
+
   *ptype = utype.type;
 
   if (pc->incoming_packet_notify) {
