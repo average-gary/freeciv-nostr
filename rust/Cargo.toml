@@ -11,13 +11,13 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "GPL-2.0"
 repository = "https://github.com/average-gary/freeciv-nostr"
 
 [workspace.dependencies]
 # Nostr
 nostr = "0.44"
-nostr-sdk = "0.44"
 nostr-connect = "0.44"
 
 # P2P Transport
@@ -31,9 +31,6 @@ hex = "0.4"
 
 # Async
 tokio = { version = "1", features = ["full"] }
-
-# FFI
-cbindgen = "0.28"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
