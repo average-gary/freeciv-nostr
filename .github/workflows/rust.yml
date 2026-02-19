@@ -2,7 +2,9 @@ name: rust
 
 on:
   push:
+    paths: ['rust/**', '.github/workflows/rust.yml']
   pull_request:
+    paths: ['rust/**', '.github/workflows/rust.yml']
 
 jobs:
   rust-checks:
@@ -14,6 +16,11 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
       - name: Check formatting
         working-directory: rust
