@@ -56,9 +56,12 @@ typedef int fc_transport_handle;
 
 /**********************************************************************//**
   Maximum number of handles that can be monitored in a single poll call.
-  Sized to match Freeciv's MAX_NUM_CONNECTIONS + listen sockets.
+  Must be >= MAX_NUM_CONNECTIONS (1024, from common/fc_types.h) plus a
+  margin for listen sockets. We cannot include fc_types.h here (it would
+  create a circular dependency with utility/), so the value is hardcoded.
+  A static_assert in transport.c verifies this stays in sync.
 **************************************************************************/
-#define FC_TRANSPORT_POLL_MAX 256
+#define FC_TRANSPORT_POLL_MAX 1032
 
 /**********************************************************************//**
   Events that can be monitored / reported by the poll mechanism.
@@ -115,7 +118,8 @@ struct fc_transport_ops {
   /* Accept an incoming connection on a listening handle.
    * Stores the new connection handle in *out.
    * Optionally fills dst_host (up to dst_host_len) with peer info.
-   * Returns 0 on success, -1 on error, 1 if would-block. */
+   * Returns 0 on success, -1 on error.
+   * Callers should use poll() to check readiness before calling. */
   int (*accept_conn)(fc_transport_handle listen_h,
                      fc_transport_handle *out,
                      char *dst_host, int dst_host_len);
@@ -149,7 +153,8 @@ struct fc_transport_ops {
   /*--- Configuration ---*/
 
   /* Set a handle to non-blocking mode.
-   * May be a no-op for inherently async backends (e.g., QUIC). */
+   * Optional: may be NULL for inherently async backends (e.g., QUIC)
+   * where all I/O is non-blocking by design. */
   void (*set_nonblock)(fc_transport_handle h);
 };
 

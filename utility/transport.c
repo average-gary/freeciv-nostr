@@ -44,7 +44,15 @@
 #include "netintf.h"
 #include "support.h"
 
+/* common */
+#include "fc_types.h"
+
 #include "transport.h"
+
+/* Verify FC_TRANSPORT_POLL_MAX is large enough for all connections
+ * plus listen sockets. MAX_NUM_CONNECTIONS is defined in fc_types.h. */
+FC_STATIC_ASSERT(FC_TRANSPORT_POLL_MAX > MAX_NUM_CONNECTIONS,
+                 poll_max_must_exceed_max_connections);
 
 /**********************************************************************//**
   TCP Backend Implementation
@@ -55,6 +63,13 @@
 
 /**********************************************************************//**
   TCP: Create a listening socket bound to bind_addr:port.
+
+  TODO: This returns a single handle for the first bindable address.
+  sernet.c's server_open_socket() binds ALL resolved addresses (enabling
+  dual-stack IPv4+IPv6 via separate listen sockets). To support dual-stack
+  through the transport layer, either listen_at needs to return multiple
+  handles, or the caller must invoke it per-address. Deferred to Phase 1.1
+  integration work.
 **************************************************************************/
 static int tcp_listen_at(fc_transport_handle *out,
                          const char *bind_addr, int port,
@@ -74,19 +89,28 @@ static int tcp_listen_at(fc_transport_handle *out,
       continue;
     }
 
+#ifndef FREECIV_HAVE_WINSOCK
+    /* SO_REUSEADDR considered harmful on Windows, necessary otherwise */
     {
       int one = 1;
 
-      setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
-                 (const char *)&one, sizeof(one));
+      if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+                     (const char *)&one, sizeof(one)) == -1) {
+        log_error("setsockopt SO_REUSEADDR failed: %s",
+                  fc_strerror(fc_get_errno()));
+      }
     }
+#endif /* FREECIV_HAVE_WINSOCK */
 
 #ifdef FREECIV_IPV6_SUPPORT
     if (paddr->saddr.sa_family == AF_INET6) {
       int one = 1;
 
-      setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY,
-                 (const char *)&one, sizeof(one));
+      if (setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY,
+                     (const char *)&one, sizeof(one)) == -1) {
+        log_error("setsockopt IPV6_V6ONLY failed: %s",
+                  fc_strerror(fc_get_errno()));
+      }
     }
 #endif /* FREECIV_IPV6_SUPPORT */
 
@@ -120,9 +144,11 @@ static int tcp_accept_conn(fc_transport_handle listen_h,
 
   new_sock = accept(listen_h, &fromend.saddr, &fromlen);
   if (new_sock < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return 1;  /* would-block */
-    }
+    /* Not distinguishing would-block here: callers use poll() to check
+     * readiness before calling accept, so EAGAIN should not normally
+     * occur. Checking errno for EAGAIN/EWOULDBLOCK after raw accept()
+     * would also be broken on Windows (no fc_accept() wrapper exists
+     * to call set_socket_errno()). Match sernet.c's approach. */
     return -1;
   }
 
@@ -141,6 +167,12 @@ static int tcp_accept_conn(fc_transport_handle listen_h,
 
 /**********************************************************************//**
   TCP: Connect to a remote host:port.
+
+  TODO: The EINPROGRESS check after fc_connect() implies non-blocking
+  connect semantics, but the socket is not set to non-blocking before
+  the connect call. Currently connect completes synchronously (matching
+  client/clinet.c behavior). If async connect is needed in the future,
+  fc_nonblock() should be called before fc_connect(). Deferred.
 **************************************************************************/
 static int tcp_connect_to(fc_transport_handle *out,
                           const char *host, int port)
@@ -240,6 +272,11 @@ static int tcp_poll(struct fc_transport_poll_set *set, int timeout_ms)
     if (fd > maxfd) {
       maxfd = fd;
     }
+  }
+
+  if (maxfd < 0) {
+    /* No valid handles to monitor. Avoid unnecessary syscall. */
+    return 0;
   }
 
   if (timeout_ms < 0) {
@@ -345,6 +382,8 @@ void fc_transport_set_backend(const struct fc_transport_ops *ops)
   fc_assert_ret(ops->read != nullptr);
   fc_assert_ret(ops->write != nullptr);
   fc_assert_ret(ops->poll != nullptr);
+  /* set_nonblock is optional — async backends (e.g., QUIC) may leave it
+   * NULL. The dispatch wrapper fc_transport_set_nonblock() checks for this. */
 
   log_normal("transport: switching backend from '%s' to '%s'",
              current_ops != nullptr ? current_ops->name : "(none)",
