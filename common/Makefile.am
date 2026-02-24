@@ -110,6 +110,8 @@ libfreeciv_la_SOURCES = \
 		specialist.c	\
 		specialist.h	\
 		srvdefs.h	\
+		state_hash.c	\
+		state_hash.h	\
 		style.c		\
 		style.h		\
 		team.c		\
