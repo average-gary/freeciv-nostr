@@ -6,9 +6,14 @@
 use nostr::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::actions::PlayerAction;
 use crate::kinds;
 
 /// Represents a single game action that will be published as a Nostr event.
+#[deprecated(
+    since = "0.2.0",
+    note = "Use `PlayerAction` from `crate::actions` instead, with `build_player_action_event`."
+)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameAction {
     /// Turn number when this action occurred.
@@ -108,6 +113,30 @@ pub fn build_action_event(
         Tag::event(game_event_id),
         Tag::custom(TagKind::custom("seq"), vec![sequence.to_string()]),
         Tag::custom(TagKind::custom("turn"), vec![action.turn.to_string()]),
+    ])
+}
+
+/// Build a GAME_ACTION event (kind 4202) from a `PlayerAction`.
+///
+/// This is the preferred way to build action events. The event includes:
+/// - `e` tag referencing the game event ID
+/// - `seq` tag with the sequence number
+/// - `turn` tag with the turn number
+/// - `phase` tag with the phase number
+/// - `prev` tag referencing the previous event ID in the player's chain
+///   (empty string for the first event)
+/// - Content is the JSON-serialized `PlayerAction`
+pub fn build_player_action_event(game_event_id: EventId, action: &PlayerAction) -> EventBuilder {
+    let content = serde_json::to_string(action).expect("PlayerAction serialization");
+
+    let prev_str = &action.prev_event_id;
+
+    EventBuilder::new(kinds::GAME_ACTION, content).tags(vec![
+        Tag::event(game_event_id),
+        Tag::custom(TagKind::custom("seq"), vec![action.sequence.to_string()]),
+        Tag::custom(TagKind::custom("turn"), vec![action.turn.to_string()]),
+        Tag::custom(TagKind::custom("phase"), vec![action.phase.to_string()]),
+        Tag::custom(TagKind::custom("prev"), vec![prev_str.clone()]),
     ])
 }
 
@@ -215,8 +244,10 @@ pub fn build_replay_event(game_id: &str, action_event_ids: &[EventId]) -> EventB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::PacketType;
 
     #[test]
+    #[allow(deprecated)]
     fn game_action_roundtrip_serialization() {
         let action = GameAction {
             turn: 42,
@@ -270,6 +301,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn build_action_event_has_correct_tags() {
         let action = GameAction {
             turn: 5,
@@ -410,5 +442,78 @@ mod tests {
         let json = serde_json::to_string(&summary).expect("serialize");
         let deserialized: GameEndSummary = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(summary, deserialized);
+    }
+
+    #[test]
+    fn build_player_action_event_has_correct_tags() {
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_ORDERS,
+            turn: 3,
+            phase: 1,
+            sequence: 7,
+            prev_event_id: "abcdef".to_string(),
+            payload: serde_json::json!({"unit_id": 42}),
+        };
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let builder = build_player_action_event(game_id, &action);
+        let unsigned = builder.build(keys.public_key());
+        assert_eq!(unsigned.kind, kinds::GAME_ACTION);
+
+        let tag_strs: Vec<String> = unsigned
+            .tags
+            .iter()
+            .map(|t| t.as_slice().join(","))
+            .collect();
+        assert!(tag_strs
+            .iter()
+            .any(|t| t.contains("seq") && t.contains("7")));
+        assert!(tag_strs
+            .iter()
+            .any(|t| t.contains("turn") && t.contains("3")));
+        assert!(tag_strs
+            .iter()
+            .any(|t| t.contains("phase") && t.contains("1")));
+        assert!(tag_strs
+            .iter()
+            .any(|t| t.contains("prev") && t.contains("abcdef")));
+
+        // Verify content roundtrips
+        let parsed: PlayerAction =
+            serde_json::from_str(&unsigned.content).expect("valid JSON content");
+        assert_eq!(parsed.packet_type, PacketType::UNIT_ORDERS);
+        assert_eq!(parsed.turn, 3);
+        assert_eq!(parsed.phase, 1);
+        assert_eq!(parsed.sequence, 7);
+        assert_eq!(parsed.prev_event_id, "abcdef");
+    }
+
+    #[test]
+    fn build_player_action_event_first_in_chain() {
+        let action = PlayerAction {
+            packet_type: PacketType::PLAYER_READY,
+            turn: 0,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({}),
+        };
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let builder = build_player_action_event(game_id, &action);
+        let unsigned = builder.build(keys.public_key());
+
+        let tag_strs: Vec<String> = unsigned
+            .tags
+            .iter()
+            .map(|t| t.as_slice().join(","))
+            .collect();
+        // prev tag should have empty value
+        assert!(
+            tag_strs.iter().any(|t| t == "prev,"),
+            "should have empty prev tag, got: {:?}",
+            tag_strs
+        );
+        assert!(tag_strs.iter().any(|t| t == "seq,0"));
     }
 }
