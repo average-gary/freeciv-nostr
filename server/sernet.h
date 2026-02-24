@@ -13,6 +13,8 @@
 #ifndef FC__SERNET_H
 #define FC__SERNET_H
 
+#include "transport.h"  /* fc_transport_handle */
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
@@ -37,7 +39,7 @@ int server_open_socket(void);
 void flush_packets(void);
 void close_connections_and_socket(void);
 void init_connections(void);
-int server_make_connection(int new_sock,
+int server_make_connection(fc_transport_handle new_handle,
                            const char *client_addr, const char *client_ip);
 void handle_conn_pong(struct connection *pconn);
 void handle_client_heartbeat(struct connection *pconn);

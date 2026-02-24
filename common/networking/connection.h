@@ -43,6 +43,7 @@ extern "C" {
 #include "shared.h"             /* MAX_LEN_ADDR */
 #include "support.h"            /* bool type */
 #include "timing.h"
+#include "transport.h"          /* fc_transport_handle */
 
 /* common */
 #include "fc_types.h"
@@ -136,6 +137,13 @@ struct packet_header {
 struct connection {
   int id;                       /* Used for server/client communication */
   int sock;
+  /* Transport abstraction handle (Phase 1.1 dual-field migration).
+   * During the transition, both sock and transport_handle coexist.
+   * Server code uses transport_handle for poll/accept/close via the
+   * transport API; legacy code still reads sock for direct fd operations
+   * (e.g., connection.c read_socket_data/write_socket_data).
+   * Phase 1.3 will remove sock and migrate all I/O to transport_handle. */
+  fc_transport_handle transport_handle;
   bool used;
   bool established;             /* Have negotiated initial packets */
   struct packet_header packet_header;
@@ -282,7 +290,7 @@ typedef void (*conn_close_fn_t) (struct connection *pconn);
 void connections_set_close_callback(conn_close_fn_t func);
 void connection_close(struct connection *pconn, const char *reason);
 
-int read_socket_data(int sock, struct socket_packet_buffer *buffer);
+int read_socket_data(fc_transport_handle h, struct socket_packet_buffer *buffer);
 void flush_connection_send_buffer_all(struct connection *pc);
 bool connection_send_data(struct connection *pconn,
                           const unsigned char *data, int len);

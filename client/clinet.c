@@ -399,7 +399,7 @@ static int read_from_connection(struct connection *pc, bool block)
     }
 
     if (FD_ISSET(socket_fd, &readfs)) {
-      return read_socket_data(socket_fd, pc->buffer);
+      return read_socket_data(pc->transport_handle, pc->buffer);
     }
   }
 }
