@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use iroh::endpoint::{Connection, RecvStream, SendStream, VarInt};
-use iroh::{EndpointAddr, EndpointId, Endpoint, SecretKey};
+use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
 use tokio::sync::Mutex;
 
 use crate::error::NetError;
@@ -152,7 +152,9 @@ mod tests {
     /// Test that creating an endpoint succeeds and produces a valid EndpointId.
     #[tokio::test]
     async fn create_endpoint() {
-        let ep = GameEndpoint::new().await.expect("failed to create endpoint");
+        let ep = GameEndpoint::new()
+            .await
+            .expect("failed to create endpoint");
         // EndpointId should be non-zero (a real public key)
         let id_str = ep.endpoint_id().to_string();
         assert!(!id_str.is_empty());
@@ -161,8 +163,12 @@ mod tests {
     /// Test that each endpoint gets a unique ephemeral key.
     #[tokio::test]
     async fn ephemeral_keys_differ() {
-        let ep1 = GameEndpoint::new().await.expect("failed to create endpoint 1");
-        let ep2 = GameEndpoint::new().await.expect("failed to create endpoint 2");
+        let ep1 = GameEndpoint::new()
+            .await
+            .expect("failed to create endpoint 1");
+        let ep2 = GameEndpoint::new()
+            .await
+            .expect("failed to create endpoint 2");
         assert_ne!(
             ep1.endpoint_id(),
             ep2.endpoint_id(),
@@ -176,7 +182,9 @@ mod tests {
     /// Test that peer_count starts at zero.
     #[tokio::test]
     async fn initial_peer_count_is_zero() {
-        let ep = GameEndpoint::new().await.expect("failed to create endpoint");
+        let ep = GameEndpoint::new()
+            .await
+            .expect("failed to create endpoint");
         assert_eq!(ep.peer_count().await, 0);
         ep.shutdown().await.unwrap();
     }
@@ -184,7 +192,9 @@ mod tests {
     /// Test that endpoint_addr returns something.
     #[tokio::test]
     async fn endpoint_addr_contains_id() {
-        let ep = GameEndpoint::new().await.expect("failed to create endpoint");
+        let ep = GameEndpoint::new()
+            .await
+            .expect("failed to create endpoint");
         let addr = ep.endpoint_addr();
         assert_eq!(addr.id, ep.endpoint_id());
         ep.shutdown().await.unwrap();

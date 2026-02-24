@@ -20,6 +20,8 @@ libfcivnetwork_la_SOURCES = \
 	dataio_json.h	\
 	dataio_raw.c	\
 	dataio_raw.h	\
+	packet_trace.c	\
+	packet_trace.h	\
 	packets.c	\
 	packets.h	\
 	packets_json.h	\

@@ -9,19 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::actions::PlayerAction;
 use crate::kinds;
 
-/// Represents a single game action that will be published as a Nostr event.
-#[deprecated(
-    since = "0.2.0",
-    note = "Use `PlayerAction` from `crate::actions` instead, with `build_player_action_event`."
-)]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GameAction {
-    /// Turn number when this action occurred.
-    pub turn: u64,
-    /// Opaque action payload (to be refined in later phases).
-    pub payload: Vec<u8>,
-}
-
 /// Game lobby settings published in a GAME_LOBBY event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LobbySettings {
@@ -95,24 +82,6 @@ pub fn build_accept_event(
     EventBuilder::new(kinds::GAME_ACCEPT, node_id_hex).tags(vec![
         Tag::event(lobby_event_id),
         Tag::public_key(lobby_creator),
-    ])
-}
-
-/// Build a GAME_ACTION event (kind 4202).
-///
-/// The core event type for game actions. Content is the serialized
-/// `GameAction` struct.
-pub fn build_action_event(
-    game_event_id: EventId,
-    action: &GameAction,
-    sequence: u64,
-) -> EventBuilder {
-    let content = serde_json::to_string(action).expect("GameAction serialization");
-
-    EventBuilder::new(kinds::GAME_ACTION, content).tags(vec![
-        Tag::event(game_event_id),
-        Tag::custom(TagKind::custom("seq"), vec![sequence.to_string()]),
-        Tag::custom(TagKind::custom("turn"), vec![action.turn.to_string()]),
     ])
 }
 
@@ -247,18 +216,6 @@ mod tests {
     use crate::actions::PacketType;
 
     #[test]
-    #[allow(deprecated)]
-    fn game_action_roundtrip_serialization() {
-        let action = GameAction {
-            turn: 42,
-            payload: vec![1, 2, 3, 4],
-        };
-        let json = serde_json::to_string(&action).expect("serialize");
-        let deserialized: GameAction = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(action, deserialized);
-    }
-
-    #[test]
     fn lobby_settings_serialization() {
         let settings = LobbySettings {
             ruleset: "civ2civ3".to_string(),
@@ -298,33 +255,6 @@ mod tests {
         let builder = build_lobby_event("game-123", &settings, &[]);
         let unsigned = builder.build(keys.public_key());
         assert_eq!(unsigned.kind, kinds::GAME_LOBBY);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn build_action_event_has_correct_tags() {
-        let action = GameAction {
-            turn: 5,
-            payload: vec![0x01, 0x02],
-        };
-        let game_id = EventId::all_zeros();
-        let keys = Keys::generate();
-        let builder = build_action_event(game_id, &action, 42);
-        let unsigned = builder.build(keys.public_key());
-        assert_eq!(unsigned.kind, kinds::GAME_ACTION);
-
-        // Check tags contain seq and turn
-        let tag_strs: Vec<String> = unsigned
-            .tags
-            .iter()
-            .map(|t| t.as_slice().join(","))
-            .collect();
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("seq") && t.contains("42")));
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("turn") && t.contains("5")));
     }
 
     #[test]
@@ -408,9 +338,11 @@ mod tests {
             .iter()
             .map(|t| t.as_slice().join(","))
             .collect();
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("chunk") && t.contains("3")));
+        assert!(
+            tag_strs
+                .iter()
+                .any(|t| t.contains("chunk") && t.contains("3"))
+        );
     }
 
     #[test]
@@ -465,18 +397,26 @@ mod tests {
             .iter()
             .map(|t| t.as_slice().join(","))
             .collect();
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("seq") && t.contains("7")));
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("turn") && t.contains("3")));
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("phase") && t.contains("1")));
-        assert!(tag_strs
-            .iter()
-            .any(|t| t.contains("prev") && t.contains("abcdef")));
+        assert!(
+            tag_strs
+                .iter()
+                .any(|t| t.contains("seq") && t.contains("7"))
+        );
+        assert!(
+            tag_strs
+                .iter()
+                .any(|t| t.contains("turn") && t.contains("3"))
+        );
+        assert!(
+            tag_strs
+                .iter()
+                .any(|t| t.contains("phase") && t.contains("1"))
+        );
+        assert!(
+            tag_strs
+                .iter()
+                .any(|t| t.contains("prev") && t.contains("abcdef"))
+        );
 
         // Verify content roundtrips
         let parsed: PlayerAction =
