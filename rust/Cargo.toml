@@ -28,6 +28,7 @@ iroh-blobs = "0.96"
 # Crypto
 sha2 = "0.10"
 hex = "0.4"
+rand = "0.9"
 
 # Async
 tokio = { version = "1", features = ["full"] }
