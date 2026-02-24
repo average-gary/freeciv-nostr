@@ -430,6 +430,7 @@ static void game_defaults(bool keep_ruleset_value)
     game.server.timeoutintinc     = GAME_DEFAULT_TIMEOUTINTINC;
     game.server.turnblock         = GAME_DEFAULT_TURNBLOCK;
     game.server.unitwaittime      = GAME_DEFAULT_UNITWAITTIME;
+    game.server.turn_start_timestamp = 0;
     game.server.plr_colors        = NULL;
     game.server.random_move_time  = NULL;
     game.server.world_peace_start = 0;

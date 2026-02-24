@@ -5057,7 +5057,7 @@ bool unit_can_do_action_now(const struct unit *punit)
     return TRUE;
   }
 
-  dt = time(nullptr) - punit->server.action_timestamp;
+  dt = game.server.turn_start_timestamp - punit->server.action_timestamp;
   if (dt < game.server.unitwaittime) {
     char buf[64];
     format_time_duration(game.server.unitwaittime - dt, buf, sizeof(buf));
@@ -5080,7 +5080,7 @@ void unit_did_action(struct unit *punit)
     return;
   }
 
-  punit->server.action_timestamp = time(nullptr);
+  punit->server.action_timestamp = game.server.turn_start_timestamp;
   punit->server.action_turn = game.info.turn;
 }
 
