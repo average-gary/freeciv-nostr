@@ -29,10 +29,15 @@ from collections import defaultdict
 TRACE_MAGIC = 0x46435054  # "FCPT"
 TRACE_VERSION = 1
 
-# Record header: uint16 type, uint32 data_len, uint32 conn_id, uint8 dir, uint64 timestamp
-# Total: 2 + 4 + 4 + 1 + 8 = 19 bytes
-RECORD_HEADER_FORMAT = '<HIIBQ'
-RECORD_HEADER_SIZE = 19
+# Record header layout (on-disk, packed with no padding):
+#   uint16 type, uint32 data_len, uint32 conn_id, uint8 dir, uint64 timestamp
+#   Total: 2 + 4 + 4 + 1 + 8 = 19 bytes
+#
+# NOTE: RECORD_HEADER_FORMAT is for documentation only. Actual parsing uses
+# individual struct.unpack_from() calls at fixed offsets to avoid Python
+# struct padding (struct.calcsize('<HIIBQ') == 24 due to alignment).
+RECORD_HEADER_FORMAT = '<HIIBQ'  # documentation only
+RECORD_HEADER_SIZE = 19  # actual on-disk size (no padding)
 
 
 def parse_packets_def(filepath):

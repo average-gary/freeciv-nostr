@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: check out Freeciv
-        uses: actions/checkout@v6.0.1
+        uses: actions/checkout@v4
 
       - name: install dependencies
         run: |
