@@ -675,7 +675,7 @@ enum server_events server_sniff_all_input(void)
         if ((!pconn->server.is_closing
              && 0 < timer_list_size(pconn->server.ping_timers)
              && timer_read_seconds(timer_list_front
-                                    (pconn->server.ping_timers))
+                                   (pconn->server.ping_timers))
                 > game.server.pingtimeout)
             || pconn->ping_time > game.server.pingtimeout) {
           /* cut mute players, except for hack-level ones */
@@ -943,7 +943,7 @@ enum server_events server_sniff_all_input(void)
           continue;
         }
 
-        nb = read_socket_data(pconn->sock, pconn->buffer);
+        nb = read_socket_data(pconn->transport_handle, pconn->buffer);
         if (0 <= nb) {
           /* We read packets; now handle them. */
           incoming_client_packets(pconn);
@@ -1079,10 +1079,9 @@ static int server_accept_connection(fc_transport_handle listen_h)
     } conn_list_iterate_end;
   }
 
-  /* Attempt reverse DNS lookup for a human-readable hostname.
-   * For the TCP backend, new_handle is the raw fd, so we can use
-   * getpeername + getnameinfo. For non-TCP backends, we fall back
-   * to the numeric IP from fc_transport_accept(). */
+  /* Reverse DNS lookup. This uses getpeername() which is TCP-specific.
+   * Non-socket backends should return the hostname from fc_transport_accept()
+   * directly. TODO(Phase 1.3): Move into transport backend. */
 #ifdef FREECIV_IPV6_SUPPORT
   {
     union fc_sockaddr fromend;
@@ -1097,6 +1096,9 @@ static int server_accept_connection(fc_transport_handle listen_h)
                   && '\0' != host[0]);
     }
   }
+  /* Reverse DNS lookup. This uses getpeername() which is TCP-specific.
+   * Non-socket backends should return the hostname from fc_transport_accept()
+   * directly. TODO(Phase 1.3): Move into transport backend. */
 #else  /* IPv6 support */
   {
     union fc_sockaddr fromend;

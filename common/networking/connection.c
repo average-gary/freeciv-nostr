@@ -127,7 +127,7 @@ static bool buffer_ensure_free_extra_space(struct socket_packet_buffer *buf,
     >0  :  number of bytes read
     =0  :  non-blocking sockets only; no data read, would block
 **************************************************************************/
-int read_socket_data(int sock, struct socket_packet_buffer *buffer)
+int read_socket_data(fc_transport_handle h, struct socket_packet_buffer *buffer)
 {
   int didget;
 
@@ -137,7 +137,7 @@ int read_socket_data(int sock, struct socket_packet_buffer *buffer)
   }
 
   log_debug("try reading %d bytes", buffer->nsize - buffer->ndata);
-  didget = fc_transport_read(sock, (buffer->data + buffer->ndata),
+  didget = fc_transport_read(h, (buffer->data + buffer->ndata),
                              buffer->nsize - buffer->ndata);
 
   if (didget > 0) {
@@ -176,7 +176,7 @@ static int write_socket_data(struct connection *pc,
     int pollret;
 
     poll_set.count = 1;
-    poll_set.entries[0].handle = pc->sock;
+    poll_set.entries[0].handle = pc->transport_handle;
     poll_set.entries[0].requested_events
       = FC_TRANSPORT_WRITE | FC_TRANSPORT_ERROR;
     poll_set.entries[0].returned_events = 0;
@@ -199,7 +199,7 @@ static int write_socket_data(struct connection *pc,
     if (poll_set.entries[0].returned_events & FC_TRANSPORT_WRITE) {
       nblock = MIN(buf->ndata-start, MAX_LEN_PACKET);
       log_debug("trying to write %d limit=%d", nblock, limit);
-      if ((nput = fc_transport_write(pc->sock,
+      if ((nput = fc_transport_write(pc->transport_handle,
                                      (const char *)buf->data+start,
                                      nblock)) == -1) {
 #ifdef NONBLOCKING_SOCKETS
@@ -636,7 +636,8 @@ void connection_common_close(struct connection *pconn)
   if (!pconn->used) {
     log_error("WARNING: Trying to close already closed connection");
   } else {
-    fc_transport_close(pconn->sock);
+    fc_transport_close(pconn->transport_handle);
+    pconn->transport_handle = FC_TRANSPORT_INVALID;
     pconn->used = FALSE;
     pconn->established = FALSE;
     if (pconn->closing_reason != nullptr) {
