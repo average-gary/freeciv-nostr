@@ -68,6 +68,7 @@
 #include "shared.h"
 #include "support.h"
 #include "timing.h"
+#include "transport.h"
 
 /* common */
 #include "dataio.h"
@@ -93,7 +94,10 @@
 
 static struct connection connections[MAX_NUM_CONNECTIONS];
 
-static int *listen_socks;
+/* Listen socket handles — managed via the transport abstraction layer.
+ * For the TCP backend these are raw file descriptors, identical to the
+ * old int* array. Non-fd backends will use handle-table mappings. */
+static fc_transport_handle *listen_socks;
 static int listen_count;
 static int socklan;
 
@@ -117,7 +121,7 @@ static int socklan;
 
 #define PROCESSING_TIME_STATISTICS 0
 
-static int server_accept_connection(int sockfd);
+static int server_accept_connection(fc_transport_handle listen_h);
 static void start_processing_request(struct connection *pconn,
                                      int request_id);
 static void finish_processing_request(struct connection *pconn);
@@ -272,7 +276,7 @@ void close_connections_and_socket(void)
   conn_list_destroy(game.est_connections);
 
   for (i = 0; i < listen_count; i++) {
-    fc_closesocket(listen_socks[i]);
+    fc_transport_close(listen_socks[i]);
   }
   FC_FREE(listen_socks);
 
@@ -293,6 +297,7 @@ void close_connections_and_socket(void)
   send_server_info_to_metaserver(META_GOODBYE);
   server_close_meta();
 
+  fc_transport_done();
   packets_deinit();
   fc_shutdown_network();
 }
@@ -376,27 +381,20 @@ static void cut_lagging_connection(struct connection *pconn)
 void flush_packets(void)
 {
   int i;
-  int max_desc;
-  fd_set writefs, exceptfs;
-  fc_timeval tv;
+  struct fc_transport_poll_set poll_set;
   time_t start;
 
   (void) time(&start);
 
   for (;;) {
-    /* Can't assign to tv.tv_sec directly on systems where it's unsigned */
     signed signsecs = (game.server.netwait - (time(NULL) - start));
 
     if (signsecs < 0) {
       return;
     }
 
-    tv.tv_usec = 0;
-    tv.tv_sec = signsecs;
-
-    FC_FD_ZERO(&writefs);
-    FC_FD_ZERO(&exceptfs);
-    max_desc = -1;
+    /* Build poll set: monitor connections with pending write data */
+    poll_set.count = 0;
 
     for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
       struct connection *pconn = &connections[i];
@@ -404,35 +402,52 @@ void flush_packets(void)
       if (pconn->used
           && !pconn->server.is_closing
           && 0 < pconn->send_buffer->ndata) {
-        FD_SET(pconn->sock, &writefs);
-        FD_SET(pconn->sock, &exceptfs);
-        max_desc = MAX(pconn->sock, max_desc);
+        struct fc_transport_poll_entry *entry
+          = &poll_set.entries[poll_set.count++];
+
+        entry->handle = pconn->transport_handle;
+        entry->requested_events = FC_TRANSPORT_WRITE | FC_TRANSPORT_ERROR;
+        entry->returned_events = 0;
       }
     }
 
-    if (max_desc == -1) {
+    if (poll_set.count == 0) {
       return;
     }
 
-    if (fc_select(max_desc + 1, NULL, &writefs, &exceptfs, &tv) <= 0) {
+    if (fc_transport_poll(&poll_set, signsecs * 1000) <= 0) {
       return;
     }
 
-    for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {   /* check for freaky players */
+    /* Map poll results back to connections */
+    for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
       struct connection *pconn = &connections[i];
+      int pi;
 
-      if (pconn->used && !pconn->server.is_closing) {
-        if (FD_ISSET(pconn->sock, &exceptfs)) {
-          log_verbose("connection (%s) cut due to exception data",
-                      conn_description(pconn));
-          connection_close_server(pconn, _("network exception"));
-        } else {
-          if (pconn->send_buffer && pconn->send_buffer->ndata > 0) {
-            if (FD_ISSET(pconn->sock, &writefs)) {
-              flush_connection_send_buffer_all(pconn);
-            } else {
-              cut_lagging_connection(pconn);
-            }
+      if (!pconn->used || pconn->server.is_closing) {
+        continue;
+      }
+
+      /* Find this connection's entry in the poll set */
+      for (pi = 0; pi < poll_set.count; pi++) {
+        if (poll_set.entries[pi].handle == pconn->transport_handle) {
+          break;
+        }
+      }
+      if (pi >= poll_set.count) {
+        continue;   /* This connection was not in the poll set */
+      }
+
+      if (poll_set.entries[pi].returned_events & FC_TRANSPORT_ERROR) {
+        log_verbose("connection (%s) cut due to exception data",
+                    conn_description(pconn));
+        connection_close_server(pconn, _("network exception"));
+      } else {
+        if (pconn->send_buffer && pconn->send_buffer->ndata > 0) {
+          if (poll_set.entries[pi].returned_events & FC_TRANSPORT_WRITE) {
+            flush_connection_send_buffer_all(pconn);
+          } else {
+            cut_lagging_connection(pconn);
           }
         }
       }
@@ -521,11 +536,22 @@ static void incoming_client_packets(struct connection *pconn)
 *****************************************************************************/
 enum server_events server_sniff_all_input(void)
 {
-  int i, s;
-  int max_desc;
+  int i;
   bool excepting;
-  fd_set readfs, writefs, exceptfs;
-  fc_timeval tv;
+  struct fc_transport_poll_set poll_set;
+  /* Index tracking for the poll set layout:
+   *   [0]                           = stdin (if monitoring, TCP backend only)
+   *   [stdin_idx+1 .. listen_start+listen_count-1] = listen sockets
+   *   [conn_start .. conn_start+N-1] = active connections
+   * We track the start indices so we can map poll results back. */
+  int stdin_idx;       /* Index of stdin entry, or -1 if not monitored */
+  int listen_start;    /* First index of listen socket entries */
+  int conn_start;      /* First index of connection entries */
+  /* Parallel array mapping poll_set connection entries back to
+   * the connections[] index, so we can quickly find the connection
+   * struct after poll returns. */
+  int conn_map[MAX_NUM_CONNECTIONS];
+  int conn_poll_count; /* Number of connection entries in poll set */
 #ifdef FREECIV_SOCKET_ZERO_NOT_STDIN
   char *bufptr;
 #endif
@@ -572,7 +598,8 @@ enum server_events server_sniff_all_input(void)
 #endif /* FREECIV_HAVE_LIBREADLINE */
 
   while (TRUE) {
-    int selret;
+    int pollret;
+    bool stdin_ready = FALSE;
 
     con_prompt_on();   /* accepting new input */
 
@@ -648,7 +675,7 @@ enum server_events server_sniff_all_input(void)
         if ((!pconn->server.is_closing
              && 0 < timer_list_size(pconn->server.ping_timers)
              && timer_read_seconds(timer_list_front
-                                   (pconn->server.ping_timers))
+                                    (pconn->server.ping_timers))
                 > game.server.pingtimeout)
             || pconn->ping_time > game.server.pingtimeout) {
           /* cut mute players, except for hack-level ones */
@@ -687,46 +714,62 @@ enum server_events server_sniff_all_input(void)
       return S_E_END_OF_TURN_TIMEOUT;
     }
 
-    tv.tv_sec = 1;
-    tv.tv_usec = 0;
-
-    FC_FD_ZERO(&readfs);
-    FC_FD_ZERO(&writefs);
-    FC_FD_ZERO(&exceptfs);
+    /* Build the transport poll set.
+     * Layout: [stdin?] [listen sockets] [active connections] */
+    poll_set.count = 0;
+    stdin_idx = -1;
 
     if (!no_input) {
 #ifdef FREECIV_SOCKET_ZERO_NOT_STDIN
       fc_init_console();
 #else /* FREECIV_SOCKET_ZERO_NOT_STDIN */
 #   if !defined(__VMS)
-      FD_SET(0, &readfs);
+      /* Monitor stdin (fd 0) for server operator input.
+       * This works because the TCP backend's poll() wraps select(),
+       * and fd 0 is a valid file descriptor.
+       * TODO: Non-fd backends will need a separate stdin mechanism. */
+      stdin_idx = poll_set.count;
+      poll_set.entries[poll_set.count].handle = 0;  /* stdin fd */
+      poll_set.entries[poll_set.count].requested_events = FC_TRANSPORT_READ;
+      poll_set.entries[poll_set.count].returned_events = 0;
+      poll_set.count++;
 #   endif /* VMS */
 #endif /* FREECIV_SOCKET_ZERO_NOT_STDIN */
     }
 
-    max_desc = 0;
+    listen_start = poll_set.count;
     for (i = 0; i < listen_count; i++) {
-      FD_SET(listen_socks[i], &readfs);
-      FD_SET(listen_socks[i], &exceptfs);
-      max_desc = MAX(max_desc, listen_socks[i]);
+      poll_set.entries[poll_set.count].handle = listen_socks[i];
+      poll_set.entries[poll_set.count].requested_events
+        = FC_TRANSPORT_READ | FC_TRANSPORT_ERROR;
+      poll_set.entries[poll_set.count].returned_events = 0;
+      poll_set.count++;
     }
 
+    conn_start = poll_set.count;
+    conn_poll_count = 0;
     for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
       struct connection *pconn = connections + i;
 
       if (pconn->used && !pconn->server.is_closing) {
-        FD_SET(pconn->sock, &readfs);
+        int events = FC_TRANSPORT_READ | FC_TRANSPORT_ERROR;
+
         if (0 < pconn->send_buffer->ndata) {
-          FD_SET(pconn->sock, &writefs);
+          events |= FC_TRANSPORT_WRITE;
         }
-        FD_SET(pconn->sock, &exceptfs);
-        max_desc = MAX(pconn->sock, max_desc);
+
+        poll_set.entries[poll_set.count].handle = pconn->transport_handle;
+        poll_set.entries[poll_set.count].requested_events = events;
+        poll_set.entries[poll_set.count].returned_events = 0;
+        conn_map[conn_poll_count] = i;
+        conn_poll_count++;
+        poll_set.count++;
       }
     }
     con_prompt_off();    /* output doesn't generate a new prompt */
 
-    selret = fc_select(max_desc + 1, &readfs, &writefs, &exceptfs, &tv);
-    if (selret == 0) {
+    pollret = fc_transport_poll(&poll_set, 1000);  /* 1 second timeout */
+    if (pollret == 0) {
       /* timeout */
       call_ai_refresh();
       script_server_signal_emit("pulse");
@@ -771,7 +814,7 @@ enum server_events server_sniff_all_input(void)
             lib$stop(status);
           }
           if (ttchar.numchars) {
-            FD_SET(0, &readfs);
+            stdin_ready = TRUE;
           } else {
             continue;
           }
@@ -783,45 +826,54 @@ enum server_events server_sniff_all_input(void)
 #endif /* FREECIV_SOCKET_ZERO_NOT_STDIN */
 #endif /* !__VMS */
       }
-    } else if (selret < 0) {
-      log_error("fc_select() failed: %s", fc_strerror(fc_get_errno()));
+    } else if (pollret < 0) {
+      log_error("fc_transport_poll() failed: %s", fc_strerror(fc_get_errno()));
     }
 
+    /* Check for stdin readiness from poll results */
+    if (stdin_idx >= 0
+        && (poll_set.entries[stdin_idx].returned_events & FC_TRANSPORT_READ)) {
+      stdin_ready = TRUE;
+    }
+
+    /* Check listen sockets for exceptions (e.g. Ctrl-Z suspend/resume) */
     excepting = FALSE;
     for (i = 0; i < listen_count; i++) {
-      if (FD_ISSET(listen_socks[i], &exceptfs)) {
+      if (poll_set.entries[listen_start + i].returned_events
+          & FC_TRANSPORT_ERROR) {
         excepting = TRUE;
         break;
       }
     }
-    if (excepting) {                  /* handle Ctrl-Z suspend/resume */
+    if (excepting) {
       continue;
     }
+
+    /* Check listen sockets for new connections */
     for (i = 0; i < listen_count; i++) {
-      s = listen_socks[i];
-      if (FD_ISSET(s, &readfs)) {     /* new players connects */
+      if (poll_set.entries[listen_start + i].returned_events
+          & FC_TRANSPORT_READ) {
         log_verbose("got new connection");
-        if (-1 == server_accept_connection(s)) {
-          /* There will be a log_error() message from
-           * server_accept_connection() if something
-           * goes wrong, so no need to make another
-           * error-level message here. */
+        if (-1 == server_accept_connection(listen_socks[i])) {
           log_verbose("failed accepting connection");
         }
       }
     }
-    for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
-      /* check for freaky players */
-      struct connection *pconn = &connections[i];
+
+    /* Check active connections for exceptions */
+    for (i = 0; i < conn_poll_count; i++) {
+      struct connection *pconn = &connections[conn_map[i]];
 
       if (pconn->used
           && !pconn->server.is_closing
-          && FD_ISSET(pconn->sock, &exceptfs)) {
+          && (poll_set.entries[conn_start + i].returned_events
+              & FC_TRANSPORT_ERROR)) {
         log_verbose("connection (%s) cut due to exception data",
                     conn_description(pconn));
         connection_close_server(pconn, _("network exception"));
       }
     }
+
 #ifdef FREECIV_SOCKET_ZERO_NOT_STDIN
     if (!no_input && (bufptr = fc_read_console())) {
       current_internal = local_to_internal_string_malloc(bufptr);
@@ -831,7 +883,7 @@ enum server_events server_sniff_all_input(void)
       current_internal = NULL;
     }
 #else  /* !FREECIV_SOCKET_ZERO_NOT_STDIN */
-    if (!no_input && FD_ISSET(0, &readfs)) {    /* input from server operator */
+    if (!no_input && stdin_ready) {    /* input from server operator */
 #ifdef FREECIV_HAVE_LIBREADLINE
       rl_callback_read_char();
       if (readline_handled_input) {
@@ -880,13 +932,14 @@ enum server_events server_sniff_all_input(void)
 #endif /* !FREECIV_SOCKET_ZERO_NOT_STDIN */
 
     {                             /* Input from a player */
-      for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
-        struct connection *pconn = connections + i;
+      for (i = 0; i < conn_poll_count; i++) {
+        struct connection *pconn = connections + conn_map[i];
         int nb;
 
         if (!pconn->used
             || pconn->server.is_closing
-            || !FD_ISSET(pconn->sock, &readfs)) {
+            || !(poll_set.entries[conn_start + i].returned_events
+                 & FC_TRANSPORT_READ)) {
           continue;
         }
 
@@ -902,14 +955,15 @@ enum server_events server_sniff_all_input(void)
         }
       }
 
-      for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
-        struct connection *pconn = &connections[i];
+      for (i = 0; i < conn_poll_count; i++) {
+        struct connection *pconn = &connections[conn_map[i]];
 
         if (pconn->used
             && !pconn->server.is_closing
             && pconn->send_buffer
             && pconn->send_buffer->ndata > 0) {
-          if (FD_ISSET(pconn->sock, &writefs)) {
+          if (poll_set.entries[conn_start + i].returned_events
+              & FC_TRANSPORT_WRITE) {
             flush_connection_send_buffer_all(pconn);
           } else {
             cut_lagging_connection(pconn);
@@ -982,48 +1036,28 @@ static const char *makeup_connection_name(int *id)
   Low level socket stuff, and basic-initialize the connection struct.
   Returns 0 on success, -1 on failure (bad accept(), or too many
   connections).
-*****************************************************************************/
-static int server_accept_connection(int sockfd)
-{
-  /* This used to have size_t for some platforms.  If this is necessary
-   * it should be done with a configure check not a platform check. */
-  socklen_t fromlen;
 
-  int new_sock;
-  union fc_sockaddr fromend;
+  Uses the transport abstraction layer for accepting new connections.
+  The TCP backend wraps POSIX accept(); future backends (e.g. QUIC)
+  implement their own accept semantics.
+*****************************************************************************/
+static int server_accept_connection(fc_transport_handle listen_h)
+{
+  fc_transport_handle new_handle;
+  char dst[INET6_ADDRSTRLEN];
   bool nameinfo = FALSE;
 #ifdef FREECIV_IPV6_SUPPORT
-  char host[NI_MAXHOST], service[NI_MAXSERV];
-  char dst[INET6_ADDRSTRLEN];
+  char host[NI_MAXHOST];
 #else  /* IPv6 support */
-  struct hostent *from;
   const char *host = NULL;
-  const char *dst;
 #endif /* IPv6 support */
 
-  fromlen = sizeof(fromend);
-
-  if ((new_sock = accept(sockfd, &fromend.saddr, &fromlen)) == -1) {
+  /* Accept via the transport layer. dst gets the numeric host address. */
+  if (fc_transport_accept(listen_h, &new_handle,
+                          dst, sizeof(dst)) != 0) {
     log_error("accept failed: %s", fc_strerror(fc_get_errno()));
     return -1;
   }
-
-#ifdef FREECIV_IPV6_SUPPORT
-  if (fromend.saddr.sa_family == AF_INET6) {
-    inet_ntop(AF_INET6, &fromend.saddr_in6.sin6_addr,
-              dst, sizeof(dst));
-  } else if (fromend.saddr.sa_family == AF_INET) {
-    inet_ntop(AF_INET, &fromend.saddr_in4.sin_addr, dst, sizeof(dst));
-  } else {
-    fc_assert(FALSE);
-
-    log_error("Unsupported address family in server_accept_connection()");
-
-    return -1;
-  }
-#else  /* IPv6 support */
-  dst = inet_ntoa(fromend.saddr_in4.sin_addr);
-#endif /* IPv6 support */
 
   if (0 != game.server.maxconnectionsperhost) {
     int count = 0;
@@ -1037,28 +1071,51 @@ static int server_accept_connection(int sockfd)
                     "connections for this address exceeded (%d).",
                     dst, game.server.maxconnectionsperhost);
 
-        /* Disconnect the accepted socket. */
-        fc_closesocket(new_sock);
+        /* Disconnect the accepted handle. */
+        fc_transport_close(new_handle);
 
         return -1;
       }
     } conn_list_iterate_end;
   }
 
+  /* Attempt reverse DNS lookup for a human-readable hostname.
+   * For the TCP backend, new_handle is the raw fd, so we can use
+   * getpeername + getnameinfo. For non-TCP backends, we fall back
+   * to the numeric IP from fc_transport_accept(). */
 #ifdef FREECIV_IPV6_SUPPORT
-  nameinfo = (0 == getnameinfo(&fromend.saddr, fromlen, host, NI_MAXHOST,
-                               service, NI_MAXSERV, NI_NUMERICSERV)
-              && '\0' != host[0]);
+  {
+    union fc_sockaddr fromend;
+    socklen_t fromlen = sizeof(fromend);
+
+    if (getpeername(new_handle, &fromend.saddr, &fromlen) == 0) {
+      char service[NI_MAXSERV];
+
+      nameinfo = (0 == getnameinfo(&fromend.saddr, fromlen,
+                                   host, NI_MAXHOST,
+                                   service, NI_MAXSERV, NI_NUMERICSERV)
+                  && '\0' != host[0]);
+    }
+  }
 #else  /* IPv6 support */
-  from = gethostbyaddr((char *) &fromend.saddr_in4.sin_addr,
-                       sizeof(fromend.saddr_in4.sin_addr), AF_INET);
-  if (NULL != from && '\0' != from->h_name[0]) {
-    host = from->h_name;
-    nameinfo = TRUE;
+  {
+    union fc_sockaddr fromend;
+    socklen_t fromlen = sizeof(fromend);
+
+    if (getpeername(new_handle, &fromend.saddr, &fromlen) == 0) {
+      struct hostent *from;
+
+      from = gethostbyaddr((char *) &fromend.saddr_in4.sin_addr,
+                           sizeof(fromend.saddr_in4.sin_addr), AF_INET);
+      if (NULL != from && '\0' != from->h_name[0]) {
+        host = from->h_name;
+        nameinfo = TRUE;
+      }
+    }
   }
 #endif /* IPv6 support */
 
-  return server_make_connection(new_sock,
+  return server_make_connection(new_handle,
                                 (nameinfo ? host : dst), dst);
 }
 
@@ -1068,20 +1125,25 @@ static int server_accept_connection(int sockfd)
   Returns 0 on success, -1 on failure (bad accept(), or too many
   connections).
 *****************************************************************************/
-int server_make_connection(int new_sock, const char *client_addr,
+int server_make_connection(fc_transport_handle new_handle,
+                           const char *client_addr,
                            const char *client_ip)
 {
   struct timer *timer;
   int i;
 
-  fc_nonblock(new_sock);
+  fc_transport_set_nonblock(new_handle);
 
   for (i = 0; i < MAX_NUM_CONNECTIONS; i++) {
     struct connection *pconn = &connections[i];
 
     if (!pconn->used) {
       connection_common_init(pconn);
-      pconn->sock = new_sock;
+      /* Dual-field: set both sock (for legacy code in connection.c)
+       * and transport_handle (for new transport-based code).
+       * Phase 1.3 will remove the sock assignment. */
+      pconn->sock = new_handle;
+      pconn->transport_handle = new_handle;
       pconn->observer = FALSE;
       pconn->playing = NULL;
       pconn->capability[0] = '\0';
@@ -1121,7 +1183,7 @@ int server_make_connection(int new_sock, const char *client_addr,
   }
 
   log_error("maximum number of connections reached");
-  fc_closesocket(new_sock);
+  fc_transport_close(new_handle);
 
   return -1;
 }
@@ -1150,6 +1212,10 @@ int server_open_socket(void)
 #ifdef FREECIV_IPV6_SUPPORT
   struct ipv6_mreq mreq6;
 #endif
+
+  /* Initialize the transport abstraction layer. Must happen before
+   * any transport handles are created or used. */
+  fc_transport_init();
 
   log_verbose("Server attempting to listen on %s:%d",
               srvarg.bind_addr ? srvarg.bind_addr : "(any)",
@@ -1372,6 +1438,7 @@ void init_connections(void)
     struct connection *pconn = &connections[i];
 
     pconn->used = FALSE;
+    pconn->transport_handle = FC_TRANSPORT_INVALID;
     pconn->self = conn_list_new();
     conn_list_prepend(pconn->self, pconn);
   }

@@ -39,6 +39,7 @@
 #include "mem.h"
 #include "netintf.h"
 #include "support.h"            /* fc_str(n)casecmp */
+#include "transport.h"
 
 /* common */
 #include "game.h"               /* game.all_connections */
@@ -136,8 +137,8 @@ int read_socket_data(int sock, struct socket_packet_buffer *buffer)
   }
 
   log_debug("try reading %d bytes", buffer->nsize - buffer->ndata);
-  didget = fc_readsocket(sock, (char *) (buffer->data + buffer->ndata),
-                         buffer->nsize - buffer->ndata);
+  didget = fc_transport_read(sock, (buffer->data + buffer->ndata),
+                             buffer->nsize - buffer->ndata);
 
   if (didget > 0) {
     buffer->ndata += didget;
@@ -171,36 +172,36 @@ static int write_socket_data(struct connection *pc,
   }
 
   for (start = 0; buf->ndata-start > limit;) {
-    fd_set writefs, exceptfs;
-    fc_timeval tv;
+    struct fc_transport_poll_set poll_set;
+    int pollret;
 
-    FC_FD_ZERO(&writefs);
-    FC_FD_ZERO(&exceptfs);
-    FD_SET(pc->sock, &writefs);
-    FD_SET(pc->sock, &exceptfs);
+    poll_set.count = 1;
+    poll_set.entries[0].handle = pc->sock;
+    poll_set.entries[0].requested_events
+      = FC_TRANSPORT_WRITE | FC_TRANSPORT_ERROR;
+    poll_set.entries[0].returned_events = 0;
 
-    tv.tv_sec = 0; tv.tv_usec = 0;
-
-    if (fc_select(pc->sock + 1, nullptr, &writefs, &exceptfs, &tv) <= 0) {
-      if (errno != EINTR) {
-        break;
-      } else {
+    pollret = fc_transport_poll(&poll_set, 0);  /* Non-blocking poll */
+    if (pollret <= 0) {
+      if (pollret < 0 && errno == EINTR) {
         /* EINTR can happen sometimes, especially when compiling with -pg.
-         * Generally we just want to run select again. */
+         * Generally we just want to poll again. */
         continue;
       }
+      break;
     }
 
-    if (FD_ISSET(pc->sock, &exceptfs)) {
+    if (poll_set.entries[0].returned_events & FC_TRANSPORT_ERROR) {
       connection_close(pc, _("network exception"));
       return -1;
     }
 
-    if (FD_ISSET(pc->sock, &writefs)) {
+    if (poll_set.entries[0].returned_events & FC_TRANSPORT_WRITE) {
       nblock = MIN(buf->ndata-start, MAX_LEN_PACKET);
       log_debug("trying to write %d limit=%d", nblock, limit);
-      if ((nput = fc_writesocket(pc->sock,
-                                 (const char *)buf->data+start, nblock)) == -1) {
+      if ((nput = fc_transport_write(pc->sock,
+                                     (const char *)buf->data+start,
+                                     nblock)) == -1) {
 #ifdef NONBLOCKING_SOCKETS
         if (errno == EWOULDBLOCK || errno == EAGAIN) {
           break;
@@ -606,6 +607,7 @@ void connection_common_init(struct connection *pconn)
 {
   pconn->established = FALSE;
   pconn->used = TRUE;
+  pconn->transport_handle = FC_TRANSPORT_INVALID;
   packet_header_init(&pconn->packet_header);
   pconn->closing_reason = nullptr;
   pconn->last_write = nullptr;
@@ -634,7 +636,7 @@ void connection_common_close(struct connection *pconn)
   if (!pconn->used) {
     log_error("WARNING: Trying to close already closed connection");
   } else {
-    fc_closesocket(pconn->sock);
+    fc_transport_close(pconn->sock);
     pconn->used = FALSE;
     pconn->established = FALSE;
     if (pconn->closing_reason != nullptr) {
