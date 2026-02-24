@@ -1157,15 +1157,15 @@ static void begin_turn(bool is_new_turn)
 {
   log_debug("Begin turn");
 
+  /* Always set the turn timestamp, even for loaded games.
+   * This ensures unitwaittime calculations are correct on the
+   * first turn after a savegame load. */
+  game.server.turn_start_timestamp = time(nullptr);
+
   event_cache_remove_old();
 
   /* Reset this each turn. */
   if (is_new_turn) {
-    /* Record wall-clock time once per turn so that unitwaittime checks
-     * within the same turn are deterministic (all units see the same
-     * timestamp rather than calling time() individually). */
-    game.server.turn_start_timestamp = time(nullptr);
-
     if (game.info.phase_mode != game.server.phase_mode_stored) {
       event_cache_phases_invalidate();
       game.info.phase_mode = game.server.phase_mode_stored;
