@@ -1,0 +1,66 @@
+name: determinism
+
+on:
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'common/**'
+      - 'ai/**'
+      - 'utility/**'
+      - 'tests/compare_traces.py'
+      - 'tests/run_determinism_check.sh'
+      - 'scripts/test-autogame.serv'
+      - '.github/workflows/determinism.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'server/**'
+      - 'common/**'
+      - 'ai/**'
+      - 'utility/**'
+      - 'tests/compare_traces.py'
+      - 'tests/run_determinism_check.sh'
+      - 'scripts/test-autogame.serv'
+      - '.github/workflows/determinism.yml'
+  workflow_dispatch:
+
+jobs:
+  determinism-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: check out Freeciv
+        uses: actions/checkout@v4
+
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
+            meson \
+            gettext \
+            libcurl4-openssl-dev \
+            liblzma-dev \
+            libicu-dev \
+            libsqlite3-dev \
+            python3
+
+      - name: build server only
+        run: |
+          meson setup build \
+            -Dclients=[] \
+            -Dfcmp=[] \
+            -Druledit=false \
+            -Dserver=true
+          meson compile -C build freeciv-server
+
+      - name: run determinism check
+        run: |
+          chmod +x tests/run_determinism_check.sh
+          ./tests/run_determinism_check.sh ./build/freeciv-server ./det_traces
+
+      - name: upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-traces
+          path: det_traces/
+          retention-days: 14
