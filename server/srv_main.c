@@ -1161,6 +1161,11 @@ static void begin_turn(bool is_new_turn)
 
   /* Reset this each turn. */
   if (is_new_turn) {
+    /* Record wall-clock time once per turn so that unitwaittime checks
+     * within the same turn are deterministic (all units see the same
+     * timestamp rather than calling time() individually). */
+    game.server.turn_start_timestamp = time(nullptr);
+
     if (game.info.phase_mode != game.server.phase_mode_stored) {
       event_cache_phases_invalidate();
       game.info.phase_mode = game.server.phase_mode_stored;
@@ -2655,6 +2660,26 @@ const char *aifill(int amount)
 #define startpos_hash_iterate_end HASH_ITERATE_END
 
 /**********************************************************************//**
+  Deterministic hash function for startpos_hash. Hashes by the tile
+  index of the start position instead of by pointer address.
+  This ensures iteration order is independent of memory layout.
+**************************************************************************/
+static genhash_val_t startpos_hash_val(const struct startpos *psp)
+{
+  return (genhash_val_t) startpos_number(psp);
+}
+
+/**********************************************************************//**
+  Deterministic comparison for startpos_hash entries.
+  Compares by tile index rather than pointer identity.
+**************************************************************************/
+static bool startpos_hash_comp(const struct startpos *psp1,
+                               const struct startpos *psp2)
+{
+  return startpos_number(psp1) == startpos_number(psp2);
+}
+
+/**********************************************************************//**
   Tool for generate_players().
 **************************************************************************/
 static void player_set_nation_full(struct player *pplayer,
@@ -2769,7 +2794,9 @@ static void generate_players(void)
     /* We're running a scenario game with specified start positions.
      * Prefer nations assigned to those positions (but we can fall back
      * to others, even if game.scenario.startpos_nations is set). */
-    struct startpos_hash *hash = startpos_hash_new();
+    struct startpos_hash *hash = startpos_hash_new_full(
+        startpos_hash_val, startpos_hash_comp,
+        nullptr, nullptr, nullptr, nullptr);
     struct nation_type *picked;
     int c, max = -1;
     int i, min;

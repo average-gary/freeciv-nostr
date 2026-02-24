@@ -253,7 +253,16 @@ static int compare_islands(const void *A_, const void *B_)
 {
   const struct islands_data_type *A = A_, *B = B_;
 
-  return B->goodies - A->goodies;
+  int diff = B->goodies - A->goodies;
+
+  if (diff != 0) {
+    return diff;
+  }
+
+  /* Tiebreaker: sort by continent id for deterministic ordering when
+   * islands have equal goodness values. Without this, qsort may return
+   * different orderings across runs for equal elements. */
+  return A->id - B->id;
 }
 
 /************************************************************************//**

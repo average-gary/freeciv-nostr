@@ -203,6 +203,8 @@ struct civ_game {
       int techpenalty;
       bool turnblock;
       int unitwaittime;   /* Minimal time between two movements of a unit */
+      time_t turn_start_timestamp; /* Wall-clock time at turn start, used
+                                    * deterministically for unitwaittime */
       int upgrade_veteran_loss;
       bool vision_reveal_tiles;
 
