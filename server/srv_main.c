@@ -86,6 +86,7 @@
 #include "packets.h"
 #include "player.h"
 #include "research.h"
+#include "state_hash.h"
 #include "tech.h"
 #include "unitlist.h"
 #include "version.h"
@@ -3107,6 +3108,20 @@ static void srv_running(void)
     is_new_turn = TRUE;
 
     end_turn();
+
+    /* Compute deterministic state hash for Nostr-based verification.
+     * At this point all turn processing is complete and game.info.turn
+     * has been advanced to the new turn number. */
+    {
+      char state_hash_hex[65];
+
+      if (fc_compute_state_hash_hex(state_hash_hex,
+                                    sizeof(state_hash_hex)) == 0) {
+        log_normal("STATE_HASH turn=%d hash=%s",
+                   game.info.turn, state_hash_hex);
+      }
+    }
+
     log_debug("Sendinfotometaserver");
     (void) send_server_info_to_metaserver(META_REFRESH);
 
