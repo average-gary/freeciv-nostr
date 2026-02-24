@@ -316,9 +316,10 @@ mod tests {
             .map(|t| t.as_slice().join(","))
             .collect();
         assert!(tags.iter().any(|t| t == "seq,1"));
-        assert!(tags
-            .iter()
-            .any(|t| t.starts_with(&format!("prev,{}", event1.id.to_hex()))));
+        assert!(
+            tags.iter()
+                .any(|t| t.starts_with(&format!("prev,{}", event1.id.to_hex())))
+        );
     }
 
     #[test]

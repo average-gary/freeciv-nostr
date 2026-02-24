@@ -1,7 +1,7 @@
 //! Length-prefixed message framing for QUIC streams.
 
 use crate::error::NetError;
-use crate::protocol::{StreamId, LENGTH_PREFIX_SIZE, MAX_MESSAGE_SIZE};
+use crate::protocol::{LENGTH_PREFIX_SIZE, MAX_MESSAGE_SIZE, StreamId};
 
 /// A framed message with a stream ID and payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub fn decode_message(data: &[u8]) -> Result<(FramedMessage, usize), NetError> {
     if data.len() < 1 + LENGTH_PREFIX_SIZE {
         return Err(NetError::IncompleteParse);
     }
-    let stream_id = StreamId::try_from(data[0]).map_err(|v| NetError::InvalidStreamId(v))?;
+    let stream_id = StreamId::try_from(data[0]).map_err(NetError::InvalidStreamId)?;
     let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
     if len > MAX_MESSAGE_SIZE {
         return Err(NetError::MessageTooLarge(len));
