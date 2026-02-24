@@ -69,12 +69,17 @@ pub const GAME_DIPLOMACY: Kind = Kind::Custom(4205);
 /// Tags: `e` (game start event), `turn`
 pub const GAME_END: Kind = Kind::Custom(4206);
 
-// ---- Ephemeral Events (not stored by relays) ----
+// ---- Ephemeral Events ----
+// NOTE: Per NIP-01, only kinds 20000-29999 are treated as ephemeral by
+// relays (not stored). Kind 14200 (HEARTBEAT) falls outside this range
+// and MAY be stored by relays. If relay-side ephemerality is needed,
+// consider moving HEARTBEAT to the 20000-29999 range in a future revision.
 
 /// Heartbeat / Presence (kind 14200)
 ///
-/// Ephemeral event indicating a player's node is alive and connected.
-/// Used for connection health monitoring.
+/// Indicates a player's node is alive and connected. Used for connection
+/// health monitoring. Note: kind 14200 is outside NIP-01's ephemeral range
+/// (20000-29999), so relays may store these events.
 ///
 /// Tags: `e` (game start event)
 pub const HEARTBEAT: Kind = Kind::Custom(14200);
@@ -126,20 +131,17 @@ pub fn kind_name(kind: Kind) -> &'static str {
 
 /// Returns true if this kind is a freeciv-nostr custom kind.
 pub fn is_freeciv_kind(kind: Kind) -> bool {
-    matches!(
-        kind,
-        k if k == GAME_LOBBY
-            || k == GAME_ACCEPT
-            || k == GAME_ACTION
-            || k == GAME_STATE_HASH
-            || k == GAME_CHAT
-            || k == GAME_DIPLOMACY
-            || k == GAME_END
-            || k == HEARTBEAT
-            || k == STATE_SYNC
-            || k == PLAYER_PROFILE
-            || k == GAME_REPLAY
-    )
+    kind == GAME_LOBBY
+        || kind == GAME_ACCEPT
+        || kind == GAME_ACTION
+        || kind == GAME_STATE_HASH
+        || kind == GAME_CHAT
+        || kind == GAME_DIPLOMACY
+        || kind == GAME_END
+        || kind == HEARTBEAT
+        || kind == STATE_SYNC
+        || kind == PLAYER_PROFILE
+        || kind == GAME_REPLAY
 }
 
 /// All regular (stored) game event kinds.

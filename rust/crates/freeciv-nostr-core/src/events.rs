@@ -44,6 +44,17 @@ pub struct StateHash {
     pub hash: String,
 }
 
+/// Summary published when a game ends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameEndSummary {
+    /// Final turn number.
+    pub turn: u64,
+    /// SHA-256 hash of the final game state (hex-encoded).
+    pub state_hash: String,
+    /// Human-readable game summary (e.g., "Player X achieved domination victory").
+    pub summary: String,
+}
+
 // ---- Event Builders ----
 
 /// Build a GAME_LOBBY event (kind 4200).
@@ -148,22 +159,12 @@ pub fn build_diplomacy_event(
 /// Build a GAME_END event (kind 4206).
 ///
 /// Published when a game concludes.
-pub fn build_end_event(
-    game_event_id: EventId,
-    turn: u64,
-    final_state_hash: &str,
-    summary: &str,
-) -> EventBuilder {
-    let content = serde_json::json!({
-        "turn": turn,
-        "state_hash": final_state_hash,
-        "summary": summary,
-    })
-    .to_string();
+pub fn build_end_event(game_event_id: EventId, end_summary: &GameEndSummary) -> EventBuilder {
+    let content = serde_json::to_string(end_summary).expect("GameEndSummary serialization");
 
     EventBuilder::new(kinds::GAME_END, content).tags(vec![
         Tag::event(game_event_id),
-        Tag::custom(TagKind::custom("turn"), vec![turn.to_string()]),
+        Tag::custom(TagKind::custom("turn"), vec![end_summary.turn.to_string()]),
     ])
 }
 
@@ -180,6 +181,35 @@ pub fn build_heartbeat_event(game_event_id: EventId) -> EventBuilder {
 pub fn build_profile_event(profile_json: &str) -> EventBuilder {
     EventBuilder::new(kinds::PLAYER_PROFILE, profile_json)
         .tags(vec![Tag::identifier("freeciv-profile")])
+}
+
+/// Build a STATE_SYNC event (kind 24200, ephemeral).
+///
+/// Used for real-time state synchronization fragments during late-join sync.
+pub fn build_state_sync_event(
+    game_event_id: EventId,
+    chunk_index: u32,
+    chunk_data: &[u8],
+) -> EventBuilder {
+    let content = hex::encode(chunk_data);
+
+    EventBuilder::new(kinds::STATE_SYNC, content).tags(vec![
+        Tag::event(game_event_id),
+        Tag::custom(TagKind::custom("chunk"), vec![chunk_index.to_string()]),
+    ])
+}
+
+/// Build a GAME_REPLAY event (kind 30421, replaceable).
+///
+/// References all action events for a completed game, enabling full replay.
+pub fn build_replay_event(game_id: &str, action_event_ids: &[EventId]) -> EventBuilder {
+    let mut tags: Vec<Tag> = vec![Tag::identifier(game_id)];
+
+    for event_id in action_event_ids {
+        tags.push(Tag::event(*event_id));
+    }
+
+    EventBuilder::new(kinds::GAME_REPLAY, "").tags(tags)
 }
 
 #[cfg(test)]
@@ -297,9 +327,8 @@ mod tests {
         let builder = build_heartbeat_event(game_id);
         let unsigned = builder.build(keys.public_key());
         assert_eq!(unsigned.kind, kinds::HEARTBEAT);
-        // Kind 14200 is in the ephemeral range (20000-29999... actually
-        // custom kinds don't have range enforcement, but our kind value
-        // is 14200 which we define as ephemeral by convention)
+        // Kind 14200 is outside NIP-01's ephemeral range (20000-29999).
+        // Relays may store these events.
     }
 
     #[test]
@@ -314,5 +343,72 @@ mod tests {
             .iter()
             .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("d"));
         assert!(has_d_tag);
+    }
+
+    #[test]
+    fn build_end_event_has_correct_kind() {
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let summary = GameEndSummary {
+            turn: 100,
+            state_hash: "abc123".to_string(),
+            summary: "Player 1 wins".to_string(),
+        };
+        let builder = build_end_event(game_id, &summary);
+        let unsigned = builder.build(keys.public_key());
+        assert_eq!(unsigned.kind, kinds::GAME_END);
+        // Verify content is valid JSON with expected fields
+        let parsed: serde_json::Value =
+            serde_json::from_str(&unsigned.content).expect("valid json");
+        assert_eq!(parsed["turn"], 100);
+        assert_eq!(parsed["state_hash"], "abc123");
+    }
+
+    #[test]
+    fn build_state_sync_event_has_chunk_tag() {
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let builder = build_state_sync_event(game_id, 3, &[0xDE, 0xAD]);
+        let unsigned = builder.build(keys.public_key());
+        assert_eq!(unsigned.kind, kinds::STATE_SYNC);
+        let tag_strs: Vec<String> = unsigned
+            .tags
+            .iter()
+            .map(|t| t.as_slice().join(","))
+            .collect();
+        assert!(tag_strs
+            .iter()
+            .any(|t| t.contains("chunk") && t.contains("3")));
+    }
+
+    #[test]
+    fn build_replay_event_has_d_tag_and_event_refs() {
+        let keys = Keys::generate();
+        let id1 = EventId::all_zeros();
+        let builder = build_replay_event("game-456", &[id1]);
+        let unsigned = builder.build(keys.public_key());
+        assert_eq!(unsigned.kind, kinds::GAME_REPLAY);
+        let has_d_tag = unsigned
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("d"));
+        assert!(has_d_tag);
+        let has_e_tag = unsigned
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("e"));
+        assert!(has_e_tag);
+    }
+
+    #[test]
+    fn game_end_summary_serialization() {
+        let summary = GameEndSummary {
+            turn: 50,
+            state_hash: "deadbeef".to_string(),
+            summary: "Draw".to_string(),
+        };
+        let json = serde_json::to_string(&summary).expect("serialize");
+        let deserialized: GameEndSummary = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(summary, deserialized);
     }
 }
