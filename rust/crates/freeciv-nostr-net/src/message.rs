@@ -4,7 +4,7 @@ use crate::error::NetError;
 use crate::protocol::{StreamId, LENGTH_PREFIX_SIZE, MAX_MESSAGE_SIZE};
 
 /// A framed message with a stream ID and payload.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FramedMessage {
     /// The type of stream this message belongs to.
     pub stream_id: StreamId,
@@ -15,13 +15,18 @@ pub struct FramedMessage {
 /// Encode a message with length-prefix framing.
 ///
 /// Format: `[1 byte stream_id] [4 bytes big-endian payload length] [payload]`
-pub fn encode_message(msg: &FramedMessage) -> Vec<u8> {
+///
+/// Returns an error if the payload exceeds [`MAX_MESSAGE_SIZE`].
+pub fn encode_message(msg: &FramedMessage) -> Result<Vec<u8>, NetError> {
+    if msg.payload.len() > MAX_MESSAGE_SIZE {
+        return Err(NetError::MessageTooLarge(msg.payload.len()));
+    }
     let len = msg.payload.len() as u32;
     let mut buf = Vec::with_capacity(1 + LENGTH_PREFIX_SIZE + msg.payload.len());
     buf.push(msg.stream_id as u8);
     buf.extend_from_slice(&len.to_be_bytes());
     buf.extend_from_slice(&msg.payload);
-    buf
+    Ok(buf)
 }
 
 /// Decode a length-prefixed message from a byte slice.
@@ -31,13 +36,7 @@ pub fn decode_message(data: &[u8]) -> Result<(FramedMessage, usize), NetError> {
     if data.len() < 1 + LENGTH_PREFIX_SIZE {
         return Err(NetError::IncompleteParse);
     }
-    let stream_id = match data[0] {
-        0 => StreamId::GameActions,
-        1 => StreamId::StateSync,
-        2 => StreamId::Chat,
-        3 => StreamId::Heartbeat,
-        other => return Err(NetError::InvalidStreamId(other)),
-    };
+    let stream_id = StreamId::try_from(data[0]).map_err(|v| NetError::InvalidStreamId(v))?;
     let len = u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as usize;
     if len > MAX_MESSAGE_SIZE {
         return Err(NetError::MessageTooLarge(len));
@@ -65,7 +64,7 @@ mod tests {
             stream_id: StreamId::GameActions,
             payload: b"hello world".to_vec(),
         };
-        let encoded = encode_message(&msg);
+        let encoded = encode_message(&msg).unwrap();
         let (decoded, consumed) = decode_message(&encoded).unwrap();
         assert_eq!(consumed, encoded.len());
         assert_eq!(decoded.stream_id, StreamId::GameActions);
@@ -84,7 +83,7 @@ mod tests {
                 stream_id: id,
                 payload: vec![0xAB, 0xCD],
             };
-            let encoded = encode_message(&msg);
+            let encoded = encode_message(&msg).unwrap();
             assert_eq!(encoded[0], expected_byte);
             let (decoded, _) = decode_message(&encoded).unwrap();
             assert_eq!(decoded.stream_id, id);
@@ -98,7 +97,7 @@ mod tests {
             stream_id: StreamId::Heartbeat,
             payload: vec![],
         };
-        let encoded = encode_message(&msg);
+        let encoded = encode_message(&msg).unwrap();
         assert_eq!(encoded.len(), 5); // 1 + 4 + 0
         let (decoded, consumed) = decode_message(&encoded).unwrap();
         assert_eq!(consumed, 5);
@@ -150,7 +149,7 @@ mod tests {
             stream_id: StreamId::StateSync,
             payload: vec![0u8; 300],
         };
-        let encoded = encode_message(&msg);
+        let encoded = encode_message(&msg).unwrap();
         // Check length prefix bytes
         let len_bytes = &encoded[1..5];
         let decoded_len =

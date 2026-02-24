@@ -6,18 +6,20 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-freeciv-nostr-core = { path = "../freeciv-nostr-core" }
 iroh = { workspace = true }
 iroh-gossip = { workspace = true }
-iroh-blobs = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-hex = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
+
+# Planned for Phase 2.2+:
+# freeciv-nostr-core = { path = "../freeciv-nostr-core" }
+# iroh-blobs = { workspace = true }
+# serde = { workspace = true }
+# serde_json = { workspace = true }
+# hex = { workspace = true }
+# tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

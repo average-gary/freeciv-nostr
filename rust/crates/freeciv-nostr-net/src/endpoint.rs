@@ -98,15 +98,34 @@ impl GameEndpoint {
         &self,
         peer: &EndpointId,
     ) -> Result<(SendStream, RecvStream), NetError> {
-        let peers = self.peers.lock().await;
-        let conn = peers
-            .get(peer)
-            .ok_or_else(|| NetError::PeerNotFound(peer.to_string()))?;
+        let conn = {
+            let peers = self.peers.lock().await;
+            peers
+                .get(peer)
+                .cloned()
+                .ok_or_else(|| NetError::PeerNotFound(peer.to_string()))?
+        }; // lock dropped here
         let (send, recv) = conn
             .open_bi()
             .await
             .map_err(|e| NetError::Stream(e.to_string()))?;
         Ok((send, recv))
+    }
+
+    /// Remove a peer from the connection map, closing the connection.
+    pub async fn remove_peer(&self, peer: &EndpointId) -> Option<()> {
+        let mut peers = self.peers.lock().await;
+        if let Some(conn) = peers.remove(peer) {
+            conn.close(VarInt::from_u32(1), b"peer removed");
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Check if a peer is in the connection map.
+    pub async fn is_connected(&self, peer: &EndpointId) -> bool {
+        self.peers.lock().await.contains_key(peer)
     }
 
     /// Get the number of connected peers.

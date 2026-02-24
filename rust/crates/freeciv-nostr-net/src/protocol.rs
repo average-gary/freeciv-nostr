@@ -23,6 +23,19 @@ pub const LENGTH_PREFIX_SIZE: usize = 4;
 /// Maximum message payload size (16 MiB)
 pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
+impl TryFrom<u8> for StreamId {
+    type Error = u8;
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::GameActions),
+            1 => Ok(Self::StateSync),
+            2 => Ok(Self::Chat),
+            3 => Ok(Self::Heartbeat),
+            _ => Err(value),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +64,19 @@ mod tests {
     fn constants_sizes() {
         assert_eq!(LENGTH_PREFIX_SIZE, 4);
         assert_eq!(MAX_MESSAGE_SIZE, 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn try_from_valid_stream_ids() {
+        assert_eq!(StreamId::try_from(0), Ok(StreamId::GameActions));
+        assert_eq!(StreamId::try_from(1), Ok(StreamId::StateSync));
+        assert_eq!(StreamId::try_from(2), Ok(StreamId::Chat));
+        assert_eq!(StreamId::try_from(3), Ok(StreamId::Heartbeat));
+    }
+
+    #[test]
+    fn try_from_invalid_stream_id() {
+        assert_eq!(StreamId::try_from(4), Err(4));
+        assert_eq!(StreamId::try_from(255), Err(255));
     }
 }
