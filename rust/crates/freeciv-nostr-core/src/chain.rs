@@ -16,13 +16,13 @@ use crate::kinds;
 #[derive(Debug, Clone)]
 pub struct PlayerChain {
     /// The game's root event ID (Game Start / Lobby event).
-    pub game_event_id: EventId,
+    game_event_id: EventId,
     /// The player's public key.
-    pub player_pubkey: PublicKey,
+    player_pubkey: PublicKey,
     /// The most recent event ID in this player's chain.
-    pub head_event_id: Option<EventId>,
+    head_event_id: Option<EventId>,
     /// Next sequence number to use.
-    pub next_sequence: u64,
+    next_sequence: u64,
 }
 
 impl PlayerChain {
@@ -36,58 +36,80 @@ impl PlayerChain {
         }
     }
 
-    /// Build a Nostr event for the given action, advancing the chain.
-    /// Returns the EventBuilder (caller must sign it).
-    ///
-    /// This constructs the event with:
-    /// - `e` tag referencing the game event ID
-    /// - `seq` tag with the sequence number
-    /// - `turn` tag with the turn number
-    /// - `phase` tag with the phase number
-    /// - `prev` tag referencing previous event ID in chain (empty string for first)
-    /// - Content is the JSON-serialized `PlayerAction`
+    /// The game's root event ID.
+    pub fn game_event_id(&self) -> EventId {
+        self.game_event_id
+    }
+
+    /// The player's public key.
+    pub fn player_pubkey(&self) -> PublicKey {
+        self.player_pubkey
+    }
+
+    /// The most recent event ID in this player's chain.
+    pub fn head_event_id(&self) -> Option<EventId> {
+        self.head_event_id
+    }
+
+    /// Next sequence number to use.
+    pub fn next_sequence(&self) -> u64 {
+        self.next_sequence
+    }
+
+    /// Build a Nostr event for the given action, without advancing the chain.
+    /// Returns the EventBuilder (caller must sign it, then call `record_published`).
     ///
     /// The action's `sequence` and `prev_event_id` fields are overwritten
-    /// with the chain's current values.
-    pub fn build_action_event(&mut self, action: &PlayerAction) -> EventBuilder {
+    /// with the chain's current values. Tags are constructed by delegating to
+    /// `crate::events::build_player_action_event` to avoid duplication.
+    pub fn build_action_event(&self, action: &PlayerAction) -> EventBuilder {
         let mut action = action.clone();
         action.sequence = self.next_sequence;
         action.prev_event_id = self.head_event_id.map(|id| id.to_hex()).unwrap_or_default();
 
-        let content =
-            serde_json::to_string(&action).expect("PlayerAction serialization should not fail");
-
-        let prev_str = &action.prev_event_id;
-
-        let tags = vec![
-            Tag::event(self.game_event_id),
-            Tag::custom(TagKind::custom("seq"), vec![action.sequence.to_string()]),
-            Tag::custom(TagKind::custom("turn"), vec![action.turn.to_string()]),
-            Tag::custom(TagKind::custom("phase"), vec![action.phase.to_string()]),
-            Tag::custom(TagKind::custom("prev"), vec![prev_str.clone()]),
-        ];
-
-        self.next_sequence += 1;
-
-        EventBuilder::new(kinds::GAME_ACTION, content).tags(tags)
+        crate::events::build_player_action_event(self.game_event_id, &action)
     }
 
-    /// Record that an event was signed and published, updating the head.
+    /// Record that an event was signed and published, advancing the chain.
     pub fn record_published(&mut self, event_id: EventId) {
+        self.next_sequence += 1;
         self.head_event_id = Some(event_id);
     }
 
     /// Validate that an incoming event correctly extends this chain.
-    /// Checks: sequence number, prev_event_id reference, player pubkey.
-    pub fn validate_incoming(&self, event: &Event) -> Result<PlayerAction, ChainError> {
+    /// Checks: event kind, game reference tag, player pubkey, sequence number,
+    /// and prev_event_id reference. The caller supplies the already-parsed
+    /// `PlayerAction` to avoid double deserialization.
+    pub fn validate_incoming(
+        &self,
+        event: &Event,
+        action: &PlayerAction,
+    ) -> Result<(), ChainError> {
+        // Check event kind
+        if event.kind != kinds::GAME_ACTION {
+            return Err(ChainError::InvalidContent(format!(
+                "expected kind {}, got {}",
+                kinds::GAME_ACTION.as_u16(),
+                event.kind.as_u16()
+            )));
+        }
+
+        // Check the `e` tag references the expected game
+        let has_game_ref = event.tags.iter().any(|t| {
+            let s = t.as_slice();
+            s.first().map(|v| v.as_str()) == Some("e")
+                && s.get(1).map(|v| v.as_str()) == Some(&self.game_event_id.to_hex())
+        });
+        if !has_game_ref {
+            return Err(ChainError::InvalidContent(
+                "event does not reference the expected game".to_string(),
+            ));
+        }
+
         // Check that the event is from the expected player
         if event.pubkey != self.player_pubkey {
             return Err(ChainError::UnknownPlayer(event.pubkey.to_hex()));
         }
-
-        // Parse the content as a PlayerAction
-        let action: PlayerAction = serde_json::from_str(&event.content)
-            .map_err(|e| ChainError::InvalidContent(e.to_string()))?;
 
         // Check sequence number
         if action.sequence != self.next_sequence {
@@ -107,7 +129,7 @@ impl PlayerChain {
             });
         }
 
-        Ok(action)
+        Ok(())
     }
 }
 
@@ -147,17 +169,20 @@ impl GameChain {
     }
 
     /// Validate and append an incoming event to the appropriate player's chain.
+    ///
+    /// Content is parsed once and reused for fork checking and validation.
     pub fn append_event(&mut self, event: &Event) -> Result<PlayerAction, ChainError> {
         let chain = self
             .chains
             .get_mut(&event.pubkey)
             .ok_or_else(|| ChainError::UnknownPlayer(event.pubkey.to_hex()))?;
 
-        // Check for fork: if we already have an event at this sequence and
-        // the incoming event has the same sequence number, it's a fork.
+        // Parse content once
         let action: PlayerAction = serde_json::from_str(&event.content)
             .map_err(|e| ChainError::InvalidContent(e.to_string()))?;
 
+        // Check for fork: if the incoming sequence is below what we expect,
+        // a conflicting event was already accepted at that sequence.
         if action.sequence < chain.next_sequence {
             return Err(ChainError::ForkDetected {
                 player: event.pubkey.to_hex(),
@@ -165,21 +190,20 @@ impl GameChain {
             });
         }
 
-        // Validate chain integrity
-        let validated_action = chain.validate_incoming(event)?;
+        // Validate chain integrity (kind, game ref, pubkey, sequence, prev)
+        chain.validate_incoming(event, &action)?;
 
         // Advance the chain
-        chain.next_sequence += 1;
-        chain.head_event_id = Some(event.id);
+        chain.record_published(event.id);
 
-        Ok(validated_action)
+        Ok(action)
     }
 
     /// Get all chain heads (latest event per player) for turn commit verification.
     pub fn chain_heads(&self) -> Vec<(PublicKey, Option<EventId>)> {
         self.chains
             .iter()
-            .map(|(pk, chain)| (*pk, chain.head_event_id))
+            .map(|(pk, chain)| (*pk, chain.head_event_id()))
             .collect()
     }
 }
@@ -230,7 +254,7 @@ mod tests {
     fn player_chain_builds_first_event_with_seq_zero() {
         let game_id = EventId::all_zeros();
         let keys = Keys::generate();
-        let mut chain = PlayerChain::new(game_id, keys.public_key());
+        let chain = PlayerChain::new(game_id, keys.public_key());
 
         let action = make_action(1, 0);
         let builder = chain.build_action_event(&action);
@@ -259,6 +283,9 @@ mod tests {
         let parsed: PlayerAction = serde_json::from_str(&unsigned.content).expect("valid JSON");
         assert_eq!(parsed.sequence, 0);
         assert_eq!(parsed.prev_event_id, "");
+
+        // build_action_event should NOT have advanced the sequence
+        assert_eq!(chain.next_sequence(), 0);
     }
 
     #[test]
@@ -298,21 +325,19 @@ mod tests {
     fn player_chain_validate_incoming_accepts_valid_event() {
         let game_id = EventId::all_zeros();
         let keys = Keys::generate();
-        let mut chain = PlayerChain::new(game_id, keys.public_key());
+        let chain = PlayerChain::new(game_id, keys.public_key());
 
-        // Build and sign the first event
+        // Build and sign the first event (build_action_event no longer mutates)
         let action = make_action(1, 0);
         let builder = chain.build_action_event(&action);
-
-        // Reset chain state to validate (build_action_event advanced next_sequence)
-        chain.next_sequence = 0;
         let event = sign_builder(builder, &keys);
 
-        let result = chain.validate_incoming(&event);
+        // Parse content and validate
+        let parsed: PlayerAction = serde_json::from_str(&event.content).expect("valid JSON");
+        let result = chain.validate_incoming(&event, &parsed);
         assert!(result.is_ok(), "should accept valid event: {:?}", result);
-        let validated = result.unwrap();
-        assert_eq!(validated.sequence, 0);
-        assert_eq!(validated.turn, 1);
+        assert_eq!(parsed.sequence, 0);
+        assert_eq!(parsed.turn, 1);
     }
 
     #[test]
@@ -337,7 +362,7 @@ mod tests {
         ]);
         let event = sign_builder(builder, &keys);
 
-        let result = chain.validate_incoming(&event);
+        let result = chain.validate_incoming(&event, &action);
         assert!(result.is_err());
         match result.unwrap_err() {
             ChainError::SequenceMismatch { expected, got } => {
@@ -364,10 +389,11 @@ mod tests {
             payload: serde_json::json!({}),
         };
         let content = serde_json::to_string(&action).unwrap();
-        let builder = EventBuilder::new(kinds::GAME_ACTION, content);
+        let builder =
+            EventBuilder::new(kinds::GAME_ACTION, content).tags(vec![Tag::event(game_id)]);
         let event = sign_builder(builder, &keys);
 
-        let result = chain.validate_incoming(&event);
+        let result = chain.validate_incoming(&event, &action);
         assert!(result.is_err());
         match result.unwrap_err() {
             ChainError::ChainRefMismatch { expected, got } => {
@@ -395,10 +421,11 @@ mod tests {
             payload: serde_json::json!({}),
         };
         let content = serde_json::to_string(&action).unwrap();
-        let builder = EventBuilder::new(kinds::GAME_ACTION, content);
+        let builder =
+            EventBuilder::new(kinds::GAME_ACTION, content).tags(vec![Tag::event(game_id)]);
         let event = sign_builder(builder, &keys_b); // signed by B, but chain is for A
 
-        let result = chain.validate_incoming(&event);
+        let result = chain.validate_incoming(&event, &action);
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), ChainError::UnknownPlayer(_)));
     }
@@ -413,20 +440,11 @@ mod tests {
         game_chain.add_player(keys_a.public_key());
         game_chain.add_player(keys_b.public_key());
 
-        // Player A sends first action
+        // Player A sends first action (build does NOT advance chain now)
         let action_a = make_action(1, 0);
-        let chain_a = game_chain
-            .get_player_chain_mut(&keys_a.public_key())
-            .unwrap();
+        let chain_a = game_chain.get_player_chain(&keys_a.public_key()).unwrap();
         let builder_a = chain_a.build_action_event(&action_a);
         let event_a = sign_builder(builder_a, &keys_a);
-
-        // Reset player A's chain state before append_event validates
-        let chain_a = game_chain
-            .get_player_chain_mut(&keys_a.public_key())
-            .unwrap();
-        chain_a.next_sequence = 0;
-        chain_a.head_event_id = None;
 
         let result_a = game_chain.append_event(&event_a);
         assert!(
@@ -437,17 +455,9 @@ mod tests {
 
         // Player B sends first action
         let action_b = make_action(1, 0);
-        let chain_b = game_chain
-            .get_player_chain_mut(&keys_b.public_key())
-            .unwrap();
+        let chain_b = game_chain.get_player_chain(&keys_b.public_key()).unwrap();
         let builder_b = chain_b.build_action_event(&action_b);
         let event_b = sign_builder(builder_b, &keys_b);
-
-        let chain_b = game_chain
-            .get_player_chain_mut(&keys_b.public_key())
-            .unwrap();
-        chain_b.next_sequence = 0;
-        chain_b.head_event_id = None;
 
         let result_b = game_chain.append_event(&event_b);
         assert!(
@@ -500,21 +510,13 @@ mod tests {
         let mut game_chain = GameChain::new(game_id);
         game_chain.add_player(keys.public_key());
 
-        // Build and append first event
+        // Build and append first event (build no longer advances chain)
         let action1 = make_action(1, 0);
-        {
-            let chain = game_chain.get_player_chain_mut(&keys.public_key()).unwrap();
-            let builder = chain.build_action_event(&action1);
-            let event = sign_builder(builder, &keys);
-
-            // Reset chain to validate
-            let chain = game_chain.get_player_chain_mut(&keys.public_key()).unwrap();
-            chain.next_sequence = 0;
-            chain.head_event_id = None;
-
-            let result = game_chain.append_event(&event);
-            assert!(result.is_ok());
-        }
+        let chain = game_chain.get_player_chain(&keys.public_key()).unwrap();
+        let builder = chain.build_action_event(&action1);
+        let event = sign_builder(builder, &keys);
+        let result = game_chain.append_event(&event);
+        assert!(result.is_ok());
 
         // Now try to submit another event at sequence 0 (fork attempt)
         let fork_action = PlayerAction {
@@ -554,26 +556,38 @@ mod tests {
     }
 
     #[test]
-    fn player_chain_sequence_advances_on_build() {
+    fn player_chain_sequence_advances_on_record_published() {
         let game_id = EventId::all_zeros();
         let keys = Keys::generate();
         let mut chain = PlayerChain::new(game_id, keys.public_key());
 
-        assert_eq!(chain.next_sequence, 0);
+        assert_eq!(chain.next_sequence(), 0);
 
+        // build_action_event should NOT advance sequence
         let action = make_action(1, 0);
-        let _ = chain.build_action_event(&action);
-        assert_eq!(chain.next_sequence, 1);
+        let builder = chain.build_action_event(&action);
+        assert_eq!(chain.next_sequence(), 0);
 
-        let _ = chain.build_action_event(&action);
-        assert_eq!(chain.next_sequence, 2);
+        // record_published should advance sequence
+        let event = sign_builder(builder, &keys);
+        chain.record_published(event.id);
+        assert_eq!(chain.next_sequence(), 1);
+        assert_eq!(chain.head_event_id(), Some(event.id));
+
+        // Second build + publish
+        let builder2 = chain.build_action_event(&action);
+        assert_eq!(chain.next_sequence(), 1);
+        let event2 = sign_builder(builder2, &keys);
+        chain.record_published(event2.id);
+        assert_eq!(chain.next_sequence(), 2);
+        assert_eq!(chain.head_event_id(), Some(event2.id));
     }
 
     #[test]
     fn build_action_event_tags_include_turn_and_phase() {
         let game_id = EventId::all_zeros();
         let keys = Keys::generate();
-        let mut chain = PlayerChain::new(game_id, keys.public_key());
+        let chain = PlayerChain::new(game_id, keys.public_key());
 
         let action = make_action(7, 2);
         let builder = chain.build_action_event(&action);
@@ -606,5 +620,116 @@ mod tests {
         game_chain.add_player(keys.public_key()); // should not panic or duplicate
 
         assert_eq!(game_chain.chain_heads().len(), 1);
+    }
+
+    #[test]
+    fn player_chain_accessors() {
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let chain = PlayerChain::new(game_id, keys.public_key());
+
+        assert_eq!(chain.game_event_id(), game_id);
+        assert_eq!(chain.player_pubkey(), keys.public_key());
+        assert_eq!(chain.head_event_id(), None);
+        assert_eq!(chain.next_sequence(), 0);
+    }
+
+    #[test]
+    fn validate_rejects_wrong_kind() {
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let chain = PlayerChain::new(game_id, keys.public_key());
+
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_ORDERS,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({}),
+        };
+        let content = serde_json::to_string(&action).unwrap();
+        // Use wrong kind (kind 1 = text note)
+        let builder = EventBuilder::new(Kind::from(1), content).tags(vec![Tag::event(game_id)]);
+        let event = sign_builder(builder, &keys);
+
+        let result = chain.validate_incoming(&event, &action);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ChainError::InvalidContent(msg) => {
+                assert!(msg.contains("expected kind"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidContent for wrong kind, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_missing_game_ref() {
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let chain = PlayerChain::new(game_id, keys.public_key());
+
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_ORDERS,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({}),
+        };
+        let content = serde_json::to_string(&action).unwrap();
+        // No `e` tag at all
+        let builder = EventBuilder::new(kinds::GAME_ACTION, content);
+        let event = sign_builder(builder, &keys);
+
+        let result = chain.validate_incoming(&event, &action);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ChainError::InvalidContent(msg) => {
+                assert!(
+                    msg.contains("does not reference the expected game"),
+                    "got: {}",
+                    msg
+                );
+            }
+            other => panic!(
+                "expected InvalidContent for missing game ref, got: {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_sequence_gap() {
+        // Chain expects sequence 0; submit an event with sequence 2 (gap)
+        let game_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let mut game_chain = GameChain::new(game_id);
+        game_chain.add_player(keys.public_key());
+
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_ORDERS,
+            turn: 1,
+            phase: 0,
+            sequence: 2, // chain expects 0
+            prev_event_id: String::new(),
+            payload: serde_json::json!({}),
+        };
+        let content = serde_json::to_string(&action).unwrap();
+        let builder = EventBuilder::new(kinds::GAME_ACTION, content).tags(vec![
+            Tag::event(game_id),
+            Tag::custom(TagKind::custom("seq"), vec!["2".to_string()]),
+        ]);
+        let event = sign_builder(builder, &keys);
+
+        let result = game_chain.append_event(&event);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ChainError::SequenceMismatch { expected, got } => {
+                assert_eq!(expected, 0);
+                assert_eq!(got, 2);
+            }
+            other => panic!("expected SequenceMismatch, got: {:?}", other),
+        }
     }
 }

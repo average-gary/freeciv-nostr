@@ -116,7 +116,7 @@ impl PacketType {
     }
 
     /// Returns true if this packet type is a game-state-mutating action
-    /// (as opposed to a query/request that doesn't change state).
+    /// (as opposed to a query/request or signaling that doesn't change state).
     pub fn is_state_mutating(&self) -> bool {
         // These are queries/informational requests that don't mutate game state:
         // - unit_action_query (82): asks what actions are available
@@ -124,7 +124,10 @@ impl PacketType {
         // - city_name_suggestion_req (43): asks for a name suggestion
         // - city_refresh (42): requests UI refresh
         // - report_req (111): requests a report
-        !matches!(self.0, 82 | 87 | 43 | 42 | 111) && ALL_ACTION_TYPES.contains(self)
+        // - chat_msg_req (26): does not mutate game state
+        // - player_ready (11): signaling, not state mutation
+        // - player_phase_done (52): signaling, not state mutation
+        !matches!(self.0, 82 | 87 | 43 | 42 | 111 | 26 | 11 | 52) && ALL_ACTION_TYPES.contains(self)
     }
 
     /// Returns the action category.
@@ -234,8 +237,10 @@ pub const ALL_ACTION_TYPES: &[PacketType] = &[
 ];
 
 /// Subset of action types that actually mutate game state.
-/// Excludes queries: `unit_action_query`, `unit_get_actions`,
-/// `city_name_suggestion_req`, `city_refresh`, `report_req`.
+/// Excludes queries (`unit_action_query`, `unit_get_actions`,
+/// `city_name_suggestion_req`, `city_refresh`, `report_req`) and
+/// signaling/non-mutating types (`chat_msg_req`, `player_ready`,
+/// `player_phase_done`).
 pub const STATE_MUTATING_TYPES: &[PacketType] = &[
     // Unit actions (minus queries)
     PacketType::UNIT_SSCS_SET,
@@ -270,10 +275,7 @@ pub const STATE_MUTATING_TYPES: &[PacketType] = &[
     PacketType::PLAYER_TECH_GOAL,
     PacketType::PLAYER_PLACE_INFRA,
     PacketType::PLAYER_MULTIPLIER,
-    // Misc (minus report_req)
-    PacketType::PLAYER_READY,
-    PacketType::CHAT_MSG_REQ,
-    PacketType::PLAYER_PHASE_DONE,
+    // Misc (minus report_req, chat_msg_req, player_ready, player_phase_done)
     PacketType::SPACESHIP_LAUNCH,
     PacketType::SPACESHIP_PLACE,
     PacketType::VOTE_SUBMIT,
@@ -396,8 +398,6 @@ mod tests {
         assert!(PacketType::PLAYER_RESEARCH.is_state_mutating());
         assert!(PacketType::PLAYER_CHANGE_GOVERNMENT.is_state_mutating());
         assert!(PacketType::SPACESHIP_LAUNCH.is_state_mutating());
-        assert!(PacketType::CHAT_MSG_REQ.is_state_mutating());
-        assert!(PacketType::PLAYER_PHASE_DONE.is_state_mutating());
         assert!(PacketType::VOTE_SUBMIT.is_state_mutating());
 
         // Non-state-mutating (queries/requests)
@@ -406,6 +406,11 @@ mod tests {
         assert!(!PacketType::CITY_NAME_SUGGESTION_REQ.is_state_mutating());
         assert!(!PacketType::CITY_REFRESH.is_state_mutating());
         assert!(!PacketType::REPORT_REQ.is_state_mutating());
+
+        // Non-state-mutating (signaling / non-mutating)
+        assert!(!PacketType::CHAT_MSG_REQ.is_state_mutating());
+        assert!(!PacketType::PLAYER_READY.is_state_mutating());
+        assert!(!PacketType::PLAYER_PHASE_DONE.is_state_mutating());
 
         // Unknown type is not state-mutating (not in ALL_ACTION_TYPES)
         assert!(!PacketType(9999).is_state_mutating());
@@ -423,15 +428,18 @@ mod tests {
     }
 
     #[test]
-    fn state_mutating_types_excludes_queries() {
-        let queries = [
+    fn state_mutating_types_excludes_non_mutating() {
+        let non_mutating = [
             PacketType::UNIT_ACTION_QUERY,
             PacketType::UNIT_GET_ACTIONS,
             PacketType::CITY_NAME_SUGGESTION_REQ,
             PacketType::CITY_REFRESH,
             PacketType::REPORT_REQ,
+            PacketType::CHAT_MSG_REQ,
+            PacketType::PLAYER_READY,
+            PacketType::PLAYER_PHASE_DONE,
         ];
-        for q in &queries {
+        for q in &non_mutating {
             assert!(
                 !STATE_MUTATING_TYPES.contains(q),
                 "{} should NOT be in STATE_MUTATING_TYPES",
@@ -448,8 +456,8 @@ mod tests {
 
     #[test]
     fn state_mutating_types_count() {
-        // 40 total - 5 queries = 35
-        assert_eq!(STATE_MUTATING_TYPES.len(), 35);
+        // 40 total - 5 queries - 3 signaling (chat, ready, phase_done) = 32
+        assert_eq!(STATE_MUTATING_TYPES.len(), 32);
     }
 
     #[test]
