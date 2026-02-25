@@ -23,7 +23,7 @@ nostr-connect = "0.44"
 # P2P Transport
 iroh = "0.96"
 iroh-gossip = "0.96"
-iroh-blobs = "0.96"
+iroh-blobs = { version = "0.96", default-features = false }
 
 # Crypto
 sha2 = "0.10"
