@@ -33,4 +33,7 @@ pub enum NetError {
     /// A gossip protocol error.
     #[error("gossip error: {0}")]
     Gossip(String),
+    /// A blob transfer error.
+    #[error("blob error: {0}")]
+    Blob(String),
 }
