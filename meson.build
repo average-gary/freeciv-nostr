@@ -1449,6 +1449,56 @@ else
   servericon = []
 endif
 
+# ---- Nostr/P2P integration (optional, requires Rust toolchain) ----
+nostr_enabled = get_option('nostr')
+if nostr_enabled
+  nostr_build_dir = join_paths(b_root, 'nostr')
+
+  nostr_rust_target = custom_target('freeciv-nostr-ffi',
+    command: [find_program(join_paths(s_root, 'scripts', 'build-rust.sh')),
+              nostr_build_dir],
+    output: ['freeciv_nostr_ffi.h'],
+    build_by_default: true,
+    console: true
+  )
+
+  if host_machine.system() == 'darwin'
+    nostr_platform_deps = [
+      dependency('appleframeworks', modules: ['Security', 'SystemConfiguration']),
+      c_compiler.find_library('resolv'),
+    ]
+  elif host_machine.system() == 'windows'
+    nostr_platform_deps = [
+      c_compiler.find_library('bcrypt'),
+      c_compiler.find_library('ws2_32'),
+      c_compiler.find_library('ntdll'),
+      c_compiler.find_library('userenv'),
+    ]
+  else
+    nostr_platform_deps = [
+      dependency('threads'),
+      c_compiler.find_library('dl', required: false),
+      c_compiler.find_library('m', required: false),
+    ]
+  endif
+
+  nostr_lib_path = join_paths(nostr_build_dir, 'rust-target', 'release')
+  nostr_ffi_lib = c_compiler.find_library('freeciv_nostr_ffi',
+    dirs: [nostr_lib_path],
+    static: true)
+
+  nostr_dep = declare_dependency(
+    dependencies: [nostr_ffi_lib] + nostr_platform_deps,
+    sources: nostr_rust_target
+  )
+
+  add_project_arguments('-DFREECIV_NOSTR', language: 'c')
+  message('Nostr/P2P integration: ENABLED')
+else
+  nostr_dep = dependency('', required: false)
+  message('Nostr/P2P integration: disabled (use -Dnostr=true to enable)')
+endif
+
 common_lib = library('freeciv',
   'utility/astring.c',
   'utility/bitvector.c',
@@ -1720,7 +1770,7 @@ if server_type != 'disabled'
     sources: [verhdr],
     link_with: [server_lib, common_lib, ais],
     dependencies: [m_dep, net_dep, readline_dep, gettext_dep, fcdb_dep,
-                   mw_extra_dep],
+                   mw_extra_dep, nostr_dep],
     install: true,
     win_subsystem: 'console'
     )
