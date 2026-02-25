@@ -426,7 +426,7 @@ struct city {
     struct {
       /* Only used in the server (./ai/ and ./server/). */
 
-      float migration_score;   /* updated by city_migration_score. */
+      double migration_score;  /* updated by city_migration_score. */
       int mgr_score_calc_turn; /* turn the migration score was calculated */
 
       int illness;

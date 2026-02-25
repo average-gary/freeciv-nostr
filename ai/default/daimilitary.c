@@ -1411,10 +1411,10 @@ static void process_attacker_want(struct ai_type *ait,
             && acity_data->invasion.attack > 0
             && acity_data->invasion.occupy == 0) {
           int owner_size = city_list_size(city_owner(acity)->cities);
-          float finishing_factor = 1;
+          double finishing_factor = 1;
 
           if (owner_size <= FINISH_HIM_CITY_COUNT) {
-            finishing_factor = (2 - (float)owner_size / FINISH_HIM_CITY_COUNT);
+            finishing_factor = (2 - (double)owner_size / FINISH_HIM_CITY_COUNT);
           }
           desire = CITY_CONQUEST_WORTH(acity, acity_data) * 10 * finishing_factor;
         } else {
@@ -1624,10 +1624,10 @@ static struct adv_choice *kill_something_with(struct ai_type *ait,
     if (unit_can_take_over(myunit) || acity_data->invasion.occupy > 0) {
       /* Bonus for getting the city */
       int owner_size = city_list_size(city_owner(acity)->cities);
-      float finishing_factor = 1;
+      double finishing_factor = 1;
 
       if (owner_size <= FINISH_HIM_CITY_COUNT) {
-        finishing_factor = (2 - (float)owner_size / FINISH_HIM_CITY_COUNT);
+        finishing_factor = (2 - (double)owner_size / FINISH_HIM_CITY_COUNT);
       }
       benefit += CITY_CONQUEST_WORTH(acity, acity_data) * finishing_factor / 3;
     }

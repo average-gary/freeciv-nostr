@@ -378,7 +378,7 @@ static void dai_choose_trade_route(struct ai_type *ait, struct city *pcity,
                                    EFT_TRADE_REVENUE_BONUS);
 
   /* Be mercy full to players with small amounts. Round up. */
-  income = ceil((float)income * pow(2.0, (double)bonus / 1000.0));
+  income = ceil((double)income * pow(2.0, (double)bonus / 1000.0));
 
   if (dest_city_nat_same_cont) {
     pct = trade_route_type_trade_pct(TRT_NATIONAL);

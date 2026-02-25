@@ -2874,12 +2874,12 @@ int city_pollution(const struct city *pcity, int shield_total)
 **************************************************************************/
 static int get_trade_illness(const struct city *pcity)
 {
-  float illness_trade = 0.0;
+  double illness_trade = 0.0;
 
   trade_partners_iterate(pcity, trade_city) {
     if (trade_city->turn_plague != -1
         && game.info.turn - trade_city->turn_plague < 5) {
-      illness_trade += (float)game.info.illness_trade_infection
+      illness_trade += (double)game.info.illness_trade_infection
                        * sqrt(1.0 * city_size_get(pcity)
                               * city_size_get(trade_city)) / 100.0;
     }
@@ -2920,7 +2920,7 @@ int city_illness_calc(const struct city *pcity, int *ill_base,
     /* offset the city size by game.info.illness_min_size */
     int use_size = city_size_get(pcity) - game.info.illness_min_size;
 
-    illness_size = (int)((1.0 - exp(- (float)use_size / 10.0))
+    illness_size = (int)((1.0 - exp(- (double)use_size / 10.0))
                          * 10.0 * game.info.illness_base_factor);
     if (is_server()) {
       /* On the server we recalculate the illness due to trade as we have

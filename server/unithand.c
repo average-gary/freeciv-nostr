@@ -1462,7 +1462,7 @@ static struct ane_expl *expl_act_not_enabl(struct unit *punit,
   struct action *blocker;
   struct player *act_player = unit_owner(punit);
   struct player *tgt_player = nullptr;
-  struct ane_expl *explnat = fc_malloc(sizeof(struct ane_expl));
+  struct ane_expl *explnat = fc_calloc(1, sizeof(struct ane_expl));
   struct civ_map *nmap = &(wld.map);
   bool can_exist = can_unit_exist_at_tile(nmap, punit, unit_tile(punit));
   bool on_native = is_native_tile(unit_type_get(punit), unit_tile(punit));
@@ -6419,11 +6419,11 @@ void create_trade_route(struct city *from, struct city *to,
   struct trade_route *proute_from, *proute_to;
 
   /* Actually create the new trade route */
-  proute_from = fc_malloc(sizeof(struct trade_route));
+  proute_from = fc_calloc(1, sizeof(struct trade_route));
   proute_from->partner = to->id;
   proute_from->goods = goods;
 
-  proute_to = fc_malloc(sizeof(struct trade_route));
+  proute_to = fc_calloc(1, sizeof(struct trade_route));
   proute_to->partner = from->id;
   proute_to->goods = goods;
 

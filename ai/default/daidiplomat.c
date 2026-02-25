@@ -565,7 +565,7 @@ static struct city *dai_diplomat_defend(struct ai_type *ait,
     /* This formula may not be optimal, but it works. */
     if (move_cost > best_dist) {
       /* punish city for being so far away */
-      urgency /= (float) (move_cost / best_dist);
+      urgency /= (double) (move_cost / best_dist);
     }
 
     if (urgency > best_urgency) {
