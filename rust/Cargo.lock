@@ -1064,12 +1064,16 @@ dependencies = [
 name = "freeciv-nostr-net"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "futures-lite",
  "iroh",
  "iroh-gossip",
  "rand 0.9.2",
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

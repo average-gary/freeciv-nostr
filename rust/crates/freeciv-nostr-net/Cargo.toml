@@ -12,6 +12,9 @@ tokio = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
+bytes = { workspace = true }
+futures-lite = "2"
+tracing = { workspace = true }
 
 # Planned for Phase 2.2+:
 # freeciv-nostr-core = { path = "../freeciv-nostr-core" }
@@ -19,7 +22,7 @@ rand = { workspace = true }
 # serde = { workspace = true }
 # serde_json = { workspace = true }
 # hex = { workspace = true }
-# tracing = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
+tracing-subscriber = { workspace = true }

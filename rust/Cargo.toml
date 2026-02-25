@@ -32,6 +32,7 @@ rand = "0.9"
 
 # Async
 tokio = { version = "1", features = ["full"] }
+bytes = "1"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
