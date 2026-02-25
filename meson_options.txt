@@ -130,3 +130,8 @@ option('fcdb',
        choices: ['sqlite3','mariadb','odbc'],
        value: ['sqlite3'],
        description: 'fcdb (player authentication) backends to build')
+
+option('nostr',
+       type: 'boolean',
+       value: false,
+       description: 'Build with Nostr/P2P integration (requires Rust toolchain and cbindgen)')

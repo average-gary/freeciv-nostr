@@ -86,7 +86,9 @@
 #include "packets.h"
 #include "player.h"
 #include "research.h"
+#ifdef FREECIV_NOSTR
 #include "state_hash.h"
+#endif
 #include "tech.h"
 #include "unitlist.h"
 #include "version.h"
@@ -3109,6 +3111,7 @@ static void srv_running(void)
 
     end_turn();
 
+#ifdef FREECIV_NOSTR
     /* Compute deterministic state hash for Nostr-based verification.
      * At this point all turn processing is complete and game.info.turn
      * has been advanced to the new turn number. */
@@ -3121,6 +3124,7 @@ static void srv_running(void)
                    game.info.turn, state_hash_hex);
       }
     }
+#endif /* FREECIV_NOSTR */
 
     log_debug("Sendinfotometaserver");
     (void) send_server_info_to_metaserver(META_REFRESH);
