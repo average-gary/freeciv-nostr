@@ -939,13 +939,12 @@ static int compare_tile_type_by_stat(const void *va, const void *vb)
   double valueb = (*b)->production[compare_key] +
                     compare_key_trade_bonus * (*b)->production[O_TRADE];
 
-  /* Most production of what we care about goes first */
-  /* Double compare is ok, both values are calculated in the same way
-     and should only be considered equal, if equal in compare_key
-     and O_TRADE */
+  /* Most production of what we care about goes first.
+     Use explicit comparison instead of subtraction to avoid
+     double-to-int truncation bugs (e.g., 0.3 truncating to 0). */
   if (valuea != valueb) {
-    /* b-a so we sort big numbers first */
-    return valueb - valuea;
+    /* b-a ordering: bigger numbers first */
+    return (valueb > valuea) ? 1 : -1;
   }
 
   return compare_tile_type_by_lattice_order(*a, *b);

@@ -865,9 +865,12 @@ struct unit *get_defender(const struct civ_map *nmap,
       int build_cost = unit_build_shield_cost_base(defender);
       int defense_rating = get_defense_rating(nmap, attacker, defender);
       /* This will make units roughly evenly good defenders look alike. */
+      /* Use lround() instead of (int) truncation to avoid off-by-one
+       * errors from floating-point rounding that could produce different
+       * defender selections across platforms. */
       int unit_def
-        = (int) (100000 * (1 - unit_win_chance(nmap, attacker,
-                                               defender, paction)));
+        = (int) lround(100000 * (1 - unit_win_chance(nmap, attacker,
+                                                     defender, paction)));
 
       fc_assert_action(0 <= unit_def, continue);
 

@@ -307,8 +307,18 @@ static const char *ranking[] = {
 **************************************************************************/
 static int secompare(const void *a, const void *b)
 {
-  return (((const struct player_score_entry *)b)->value -
-          ((const struct player_score_entry *)a)->value);
+  const struct player_score_entry *pa = (const struct player_score_entry *)a;
+  const struct player_score_entry *pb = (const struct player_score_entry *)b;
+  int diff = pb->value - pa->value;
+
+  if (diff != 0) {
+    return diff;
+  }
+
+  /* Tiebreaker: sort by player number for deterministic ordering when
+   * entries have equal values. Without this, qsort may produce different
+   * orderings across runs for equal elements. */
+  return player_number(pa->player) - player_number(pb->player);
 }
 
 /**********************************************************************//**

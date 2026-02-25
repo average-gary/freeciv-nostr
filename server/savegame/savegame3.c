@@ -2280,9 +2280,11 @@ static void sg_save_game(struct savedata *saving)
                      "game.server_state");
 
   if (game.server.phase_timer != NULL) {
+    /* Write deterministic value: use only the additional_phase_seconds
+     * component, not wall-clock timer_read_seconds() which varies
+     * between runs and breaks save file reproducibility (L5/L6). */
     secfile_insert_int(saving->file,
-                       timer_read_seconds(game.server.phase_timer)
-                       + game.server.additional_phase_seconds,
+                       game.server.additional_phase_seconds,
                        "game.phase_seconds");
   }
 
@@ -3224,18 +3226,43 @@ static void sg_save_map_startpos(struct savedata *saving)
       secfile_insert_str(saving->file, "", "map.startpos%d.nations", i);
     } else {
       const struct nation_hash *nations = startpos_raw_nations(psp);
-      char nation_names[MAX_LEN_NAME * nation_hash_size(nations)];
+      int ncount = nation_hash_size(nations);
+      char nation_names[MAX_LEN_NAME * ncount];
+      /* Collect nations into a temporary array and sort by nation_number()
+       * for deterministic save ordering. Hash table iteration order
+       * depends on pointer values and is non-deterministic. */
+      const struct nation_type *nation_arr[ncount];
+      int ni = 0;
+
+      nation_hash_iterate(nations, pnation) {
+        nation_arr[ni++] = pnation;
+      } nation_hash_iterate_end;
+
+      /* Sort by nation_number for deterministic ordering */
+      {
+        int j, k;
+        for (j = 1; j < ni; j++) {
+          const struct nation_type *key = nation_arr[j];
+          int key_num = nation_number(key);
+          k = j - 1;
+          while (k >= 0 && nation_number(nation_arr[k]) > key_num) {
+            nation_arr[k + 1] = nation_arr[k];
+            k--;
+          }
+          nation_arr[k + 1] = key;
+        }
+      }
 
       nation_names[0] = '\0';
-      nation_hash_iterate(nations, pnation) {
+      for (ni = 0; ni < ncount; ni++) {
         if ('\0' == nation_names[0]) {
-          fc_strlcpy(nation_names, nation_rule_name(pnation),
+          fc_strlcpy(nation_names, nation_rule_name(nation_arr[ni]),
                      sizeof(nation_names));
         } else {
           cat_snprintf(nation_names, sizeof(nation_names),
-                       "%c%s", SEPARATOR, nation_rule_name(pnation));
+                       "%c%s", SEPARATOR, nation_rule_name(nation_arr[ni]));
         }
-      } nation_hash_iterate_end;
+      }
       secfile_insert_str(saving->file, nation_names,
                          "map.startpos%d.nations", i);
     }

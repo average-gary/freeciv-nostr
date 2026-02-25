@@ -1618,8 +1618,8 @@ void dai_diplomacy_actions(struct ai_type *ait, struct player *pplayer)
   int most_hatred = MAX_AI_LOVE;
   int war_threshold;
   int aggr;
-  float aggr_sr;
-  float max_sr;
+  double aggr_sr;
+  double max_sr;
 
   fc_assert_ret(is_ai(pplayer));
 

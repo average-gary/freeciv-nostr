@@ -147,7 +147,7 @@ static void update_city_activity(struct city *pcity);
 static void nullify_caravan_and_disband_plus(struct city *pcity);
 static bool city_illness_check(const struct city * pcity);
 
-static float city_migration_score(struct city *pcity);
+static double city_migration_score(struct city *pcity);
 static bool do_city_migration(struct city *pcity_from,
                               struct city *pcity_to);
 static bool check_city_migrations_player(const struct player *pplayer);
@@ -4080,9 +4080,9 @@ static bool disband_city(struct city *pcity)
   * for the capital an additional factor of 1.25 is used
   * the score is also modified by the effect EFT_MIGRATION_PCT
 **************************************************************************/
-static float city_migration_score(struct city *pcity)
+static double city_migration_score(struct city *pcity)
 {
-  float score = 0.0;
+  double score = 0.0;
   int build_shield_cost = 0;
   bool has_wonder = FALSE;
 
@@ -4112,28 +4112,28 @@ static float city_migration_score(struct city *pcity)
   } city_built_iterate_end;
 
   /* take shield costs of all buidings into account; normalized by 1000 */
-  score *= (1 + (1 - exp(- (float) MAX(0, build_shield_cost) / 1000)) / 5);
+  score *= (1 + (1 - exp(- (double) MAX(0, build_shield_cost) / 1000)) / 5);
   /* take trade into account; normalized by 100 */
-  score *= (1 + (1 - exp(- (float) MAX(0, pcity->surplus[O_TRADE]) / 100))
+  score *= (1 + (1 - exp(- (double) MAX(0, pcity->surplus[O_TRADE]) / 100))
                 / 5);
   /* take luxury into account; normalized by 100 */
-  score *= (1 + (1 - exp(- (float) MAX(0, pcity->surplus[O_LUXURY]) / 100))
+  score *= (1 + (1 - exp(- (double) MAX(0, pcity->surplus[O_LUXURY]) / 100))
                 / 5);
   /* take science into account; normalized by 100 */
-  score *= (1 + (1 - exp(- (float) MAX(0, pcity->surplus[O_SCIENCE]) / 100))
+  score *= (1 + (1 - exp(- (double) MAX(0, pcity->surplus[O_SCIENCE]) / 100))
                 / 5);
 
   score += city_culture(pcity) * game.info.culture_migration_pml / 1000;
 
   /* Take food into account; the food surplus is clipped to values between
    * -10..20 and normalize by 10. Thus, the factor is between 0.9 and 1.2. */
-  score *= (1 + (float) CLIP(-10, pcity->surplus[O_FOOD], 20) / 10 );
+  score *= (1 + (double) CLIP(-10, pcity->surplus[O_FOOD], 20) / 10 );
 
   /* Reduce the score due to city illness (plague). The illness is given in
    * tenth of percent (0..1000) and normalized by 25. Thus, this factor is
    * between 0.6 (ill city) and 1.0 (health city). */
-  score *= (100 - (float)city_illness_calc(pcity, nullptr, nullptr,
-                                           nullptr, nullptr) / 25);
+  score *= (100 - (double)city_illness_calc(pcity, nullptr, nullptr,
+                                            nullptr, nullptr) / 25);
 
   if (has_wonder) {
     /* People like wonders */
@@ -4624,9 +4624,9 @@ void check_disasters(void)
 static bool check_city_migrations_player(const struct player *pplayer)
 {
   char city_link_text[MAX_LEN_LINK];
-  float best_city_player_score, best_city_world_score;
+  double best_city_player_score, best_city_world_score;
   struct city *best_city_player, *best_city_world, *acity;
-  float score_from, score_tmp, weight;
+  double score_from, score_tmp, weight;
   int dist, mgr_dist;
   bool internat = FALSE;
 
@@ -4688,7 +4688,7 @@ static bool check_city_migrations_player(const struct player *pplayer)
       }
 
       /* Score of the second city, weighted by the distance */
-      weight = ((float) (mgr_dist + 1 - dist) / (float) (mgr_dist + 1));
+      weight = ((double) (mgr_dist + 1 - dist) / (double) (mgr_dist + 1));
       score_tmp = city_migration_score(acity) * weight;
 
       log_debug("[M] T%d - compare city: %s (%s) dist: %d mgr_dist: %d "

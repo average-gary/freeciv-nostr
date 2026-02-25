@@ -3913,7 +3913,7 @@ static struct unit_move_data *unit_move_data_get(struct unit *punit,
                   "Unit number %d (%p) has done an incomplete move.",
                   punit->id, punit);
   } else {
-    pdata = fc_malloc(sizeof(*pdata));
+    pdata = fc_calloc(1, sizeof(*pdata));
     pdata->ref_count = 1;
     pdata->punit = punit;
     punit->server.moving = pdata;

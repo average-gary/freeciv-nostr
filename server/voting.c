@@ -350,7 +350,7 @@ struct vote *vote_new(struct connection *caller,
   remove_vote(get_vote_by_caller(caller));
 
   /* Make a new vote */
-  pvote = fc_malloc(sizeof(struct vote));
+  pvote = fc_calloc(1, sizeof(struct vote));
   pvote->caller_id = caller->id;
   pvote->command_id = command_id;
   pcmd = command_by_number(command_id);
