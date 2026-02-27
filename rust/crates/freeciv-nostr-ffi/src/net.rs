@@ -1989,6 +1989,459 @@ pub extern "C" fn fcn_desync_detector_free(detector: *mut FcnDesyncDetector) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Relay / Connection Monitor FFI
+// ---------------------------------------------------------------------------
+
+use freeciv_nostr_net::relay::{ConnectionMonitor, ConnectionQuality, RelayConfig};
+
+/// Opaque handle to a connection monitor.
+pub struct FcnConnectionMonitor {
+    inner: ConnectionMonitor,
+}
+
+/// Return the default relay configuration as a JSON string.
+///
+/// The caller must free the returned string with `fcn_string_free()`.
+/// Returns `NULL` on serialization error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_relay_config_default() -> *mut c_char {
+    let config = RelayConfig::default();
+    match serde_json::to_string(&config) {
+        Ok(s) => string_to_c(s),
+        Err(e) => {
+            set_last_error(&format!("failed to serialize relay config: {e}"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Create a new connection monitor.
+///
+/// The caller must free with `fcn_connection_monitor_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_new() -> *mut FcnConnectionMonitor {
+    Box::into_raw(Box::new(FcnConnectionMonitor {
+        inner: ConnectionMonitor::new(),
+    }))
+}
+
+/// Update connection quality for a peer.
+///
+/// `quality_json` is a JSON-serialized `ConnectionQuality`.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_update(
+    monitor: *mut FcnConnectionMonitor,
+    quality_json: *const c_char,
+) -> i32 {
+    if monitor.is_null() {
+        set_last_error("null monitor pointer");
+        return -1;
+    }
+    let json_str = match cstr_to_str(quality_json) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let quality: ConnectionQuality = match serde_json::from_str(json_str) {
+        Ok(q) => q,
+        Err(e) => {
+            set_last_error(&format!("invalid quality JSON: {e}"));
+            return -1;
+        }
+    };
+    // SAFETY: Caller guarantees monitor is valid.
+    let monitor = unsafe { &mut *monitor };
+    monitor.inner.update(quality);
+    0
+}
+
+/// Get connection quality for a specific peer.
+///
+/// Returns a JSON string with the `ConnectionQuality`, or `NULL` if not found
+/// or on error.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_get(
+    monitor: *const FcnConnectionMonitor,
+    peer_id: *const c_char,
+) -> *mut c_char {
+    if monitor.is_null() {
+        set_last_error("null monitor pointer");
+        return std::ptr::null_mut();
+    }
+    let pid = match cstr_to_str(peer_id) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    // SAFETY: Caller guarantees monitor is valid.
+    let monitor = unsafe { &*monitor };
+    match monitor.inner.get(pid) {
+        Some(quality) => match serde_json::to_string(quality) {
+            Ok(s) => string_to_c(s),
+            Err(e) => {
+                set_last_error(&format!("failed to serialize quality: {e}"));
+                std::ptr::null_mut()
+            }
+        },
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Get the number of direct connections.
+///
+/// Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_direct_count(monitor: *const FcnConnectionMonitor) -> i32 {
+    if monitor.is_null() {
+        set_last_error("null monitor pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees monitor is valid.
+    let monitor = unsafe { &*monitor };
+    monitor.inner.direct_count() as i32
+}
+
+/// Get the number of relayed connections.
+///
+/// Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_relayed_count(
+    monitor: *const FcnConnectionMonitor,
+) -> i32 {
+    if monitor.is_null() {
+        set_last_error("null monitor pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees monitor is valid.
+    let monitor = unsafe { &*monitor };
+    monitor.inner.relayed_count() as i32
+}
+
+/// Get the number of active connections.
+///
+/// Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_active_count(monitor: *const FcnConnectionMonitor) -> i32 {
+    if monitor.is_null() {
+        set_last_error("null monitor pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees monitor is valid.
+    let monitor = unsafe { &*monitor };
+    monitor.inner.active_count() as i32
+}
+
+/// Free a connection monitor handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_connection_monitor_free(monitor: *mut FcnConnectionMonitor) {
+    if !monitor.is_null() {
+        // SAFETY: Caller guarantees monitor was returned by fcn_connection_monitor_new.
+        unsafe {
+            let _ = Box::from_raw(monitor);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Game Node FFI
+// ---------------------------------------------------------------------------
+
+use freeciv_nostr_net::node::{GameNode, NodeConfig, NodeState};
+
+/// Opaque handle to a game node.
+pub struct FcnGameNode {
+    inner: GameNode,
+}
+
+/// Helper struct for deserializing node configuration from JSON.
+#[derive(serde::Deserialize)]
+struct NodeConfigJson {
+    player_pubkey: String,
+    is_lead: bool,
+    game_event_id: Option<String>,
+    phase_mode: u8,
+    turn_timeout_secs: u32,
+    checkpoint_interval: u32,
+    #[serde(default)]
+    relay_config: Option<RelayConfig>,
+}
+
+/// Create a new game node.
+///
+/// `config_json` is a JSON object with fields:
+///   - `player_pubkey`: hex string
+///   - `is_lead`: boolean
+///   - `game_event_id`: optional hex string
+///   - `phase_mode`: 0=Concurrent, 1=PlayersAlternate, 2=TeamsAlternate
+///   - `turn_timeout_secs`: u32 (0 = no timeout)
+///   - `checkpoint_interval`: u32 (0 = disabled)
+///   - `relay_config`: optional RelayConfig JSON
+///
+/// Returns an opaque handle, or `NULL` on error.
+/// The caller must free with `fcn_node_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_new(config_json: *const c_char) -> *mut FcnGameNode {
+    let json_str = match cstr_to_str(config_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let cfg: NodeConfigJson = match serde_json::from_str(json_str) {
+        Ok(c) => c,
+        Err(e) => {
+            set_last_error(&format!("invalid node config JSON: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let phase_mode = match cfg.phase_mode {
+        0 => PhaseMode::Concurrent,
+        1 => PhaseMode::PlayersAlternate,
+        2 => PhaseMode::TeamsAlternate,
+        other => {
+            set_last_error(&format!("invalid phase_mode: {other}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let config = NodeConfig {
+        player_pubkey: cfg.player_pubkey,
+        is_lead: cfg.is_lead,
+        game_event_id: cfg.game_event_id,
+        phase_mode,
+        turn_timeout_secs: cfg.turn_timeout_secs,
+        checkpoint_interval: cfg.checkpoint_interval,
+        relay_config: cfg.relay_config.unwrap_or_default(),
+    };
+    Box::into_raw(Box::new(FcnGameNode {
+        inner: GameNode::new(config),
+    }))
+}
+
+/// Get the current node state as an integer.
+///
+/// Returns: 0=Initializing, 1=InLobby, 2=Connecting, 3=Playing,
+/// 4=Finished, 5=Error. Returns -1 on null pointer.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_state(node: *const FcnGameNode) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &*node };
+    match node.inner.state() {
+        NodeState::Initializing => 0,
+        NodeState::InLobby => 1,
+        NodeState::Connecting => 2,
+        NodeState::Playing => 3,
+        NodeState::Finished => 4,
+        NodeState::Error => 5,
+    }
+}
+
+/// Create a lobby (lead player).
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_create_lobby(
+    node: *mut FcnGameNode,
+    lobby_id: *const c_char,
+    max_players: u8,
+) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    let lid = match cstr_to_str(lobby_id) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &mut *node };
+    match node.inner.create_lobby(lid, max_players) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Join an existing lobby (non-lead player).
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_join_lobby(
+    node: *mut FcnGameNode,
+    lobby_id: *const c_char,
+    lead_pk: *const c_char,
+    max_players: u8,
+) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    let lid = match cstr_to_str(lobby_id) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let lead = match cstr_to_str(lead_pk) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &mut *node };
+    match node.inner.join_lobby(lid, lead, max_players) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Start the game.
+///
+/// `player_pubkeys_json` is a JSON array of hex pubkey strings.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_start_game(
+    node: *mut FcnGameNode,
+    player_pubkeys_json: *const c_char,
+) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    let json_str = match cstr_to_str(player_pubkeys_json) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let pubkeys: Vec<String> = match serde_json::from_str(json_str) {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error(&format!("invalid player pubkeys JSON: {e}"));
+            return -1;
+        }
+    };
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &mut *node };
+    match node.inner.start_game(pubkeys) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Mark connections as established, transition to Playing.
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_connections_ready(node: *mut FcnGameNode) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &mut *node };
+    match node.inner.connections_ready() {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Begin a new turn.
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_begin_turn(node: *mut FcnGameNode, turn: u32) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &mut *node };
+    match node.inner.begin_turn(turn) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// End the game.
+///
+/// Returns 0 on success, -1 on error (null pointer).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_end_game(node: *mut FcnGameNode) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &mut *node };
+    node.inner.end_game();
+    0
+}
+
+/// Get the current turn number.
+///
+/// Returns -1 on error (null pointer).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_current_turn(node: *const FcnGameNode) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &*node };
+    node.inner.current_turn() as i32
+}
+
+/// Get the player's public key as a hex string.
+///
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_player_pubkey(node: *const FcnGameNode) -> *mut c_char {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &*node };
+    string_to_c(node.inner.player_pubkey().to_string())
+}
+
+/// Check if this node is the game lead.
+///
+/// Returns 1 if lead, 0 if not, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_is_lead(node: *const FcnGameNode) -> i32 {
+    if node.is_null() {
+        set_last_error("null node pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees node is valid.
+    let node = unsafe { &*node };
+    if node.inner.is_lead() { 1 } else { 0 }
+}
+
+/// Free a game node handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_node_free(node: *mut FcnGameNode) {
+    if !node.is_null() {
+        // SAFETY: Caller guarantees node was returned by fcn_node_new.
+        unsafe {
+            let _ = Box::from_raw(node);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2635,5 +3088,227 @@ mod tests {
             -1
         );
         fcn_transport_free(t);
+    }
+
+    // -- Relay / Connection Monitor FFI ------------------------------------
+
+    #[test]
+    fn relay_config_default_returns_json() {
+        let ptr = fcn_relay_config_default();
+        assert!(!ptr.is_null());
+        let s = unsafe { CStr::from_ptr(ptr) }.to_str().unwrap();
+        assert!(s.contains("use_public_relays"));
+        assert!(s.contains("true"));
+        crate::error::fcn_string_free(ptr);
+    }
+
+    #[test]
+    fn connection_monitor_lifecycle() {
+        let m = fcn_connection_monitor_new();
+        assert!(!m.is_null());
+
+        assert_eq!(fcn_connection_monitor_active_count(m), 0);
+        assert_eq!(fcn_connection_monitor_direct_count(m), 0);
+        assert_eq!(fcn_connection_monitor_relayed_count(m), 0);
+
+        // Update with a direct peer.
+        let quality_json = std::ffi::CString::new(
+            r#"{"conn_type":"Direct","rtt":null,"is_active":true,"peer_id":"peer1"}"#,
+        )
+        .unwrap();
+        assert_eq!(fcn_connection_monitor_update(m, quality_json.as_ptr()), 0);
+        assert_eq!(fcn_connection_monitor_active_count(m), 1);
+        assert_eq!(fcn_connection_monitor_direct_count(m), 1);
+        assert_eq!(fcn_connection_monitor_relayed_count(m), 0);
+
+        // Update with a relayed peer.
+        let quality_json2 = std::ffi::CString::new(
+            r#"{"conn_type":"Relayed","rtt":null,"is_active":true,"peer_id":"peer2"}"#,
+        )
+        .unwrap();
+        assert_eq!(fcn_connection_monitor_update(m, quality_json2.as_ptr()), 0);
+        assert_eq!(fcn_connection_monitor_active_count(m), 2);
+        assert_eq!(fcn_connection_monitor_direct_count(m), 1);
+        assert_eq!(fcn_connection_monitor_relayed_count(m), 1);
+
+        // Get peer1 quality.
+        let peer_id = std::ffi::CString::new("peer1").unwrap();
+        let q = fcn_connection_monitor_get(m, peer_id.as_ptr());
+        assert!(!q.is_null());
+        let q_str = unsafe { CStr::from_ptr(q) }.to_str().unwrap();
+        assert!(q_str.contains("Direct"));
+        crate::error::fcn_string_free(q);
+
+        // Get nonexistent peer.
+        let missing = std::ffi::CString::new("ghost").unwrap();
+        let q = fcn_connection_monitor_get(m, missing.as_ptr());
+        assert!(q.is_null());
+
+        fcn_connection_monitor_free(m);
+    }
+
+    #[test]
+    fn connection_monitor_null_safety() {
+        assert_eq!(
+            fcn_connection_monitor_update(std::ptr::null_mut(), std::ptr::null()),
+            -1
+        );
+        assert!(fcn_connection_monitor_get(std::ptr::null(), std::ptr::null()).is_null());
+        assert_eq!(fcn_connection_monitor_direct_count(std::ptr::null()), -1);
+        assert_eq!(fcn_connection_monitor_relayed_count(std::ptr::null()), -1);
+        assert_eq!(fcn_connection_monitor_active_count(std::ptr::null()), -1);
+        fcn_connection_monitor_free(std::ptr::null_mut()); // no-op
+    }
+
+    #[test]
+    fn connection_monitor_invalid_json() {
+        let m = fcn_connection_monitor_new();
+        let bad_json = std::ffi::CString::new("not json").unwrap();
+        assert_eq!(fcn_connection_monitor_update(m, bad_json.as_ptr()), -1);
+        fcn_connection_monitor_free(m);
+    }
+
+    // -- Game Node FFI -----------------------------------------------------
+
+    fn make_node_config_json(is_lead: bool) -> std::ffi::CString {
+        std::ffi::CString::new(format!(
+            r#"{{"player_pubkey":"player_abc","is_lead":{},"game_event_id":null,"phase_mode":0,"turn_timeout_secs":0,"checkpoint_interval":5}}"#,
+            is_lead
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn node_full_lifecycle_ffi() {
+        let cfg = make_node_config_json(true);
+        let node = fcn_node_new(cfg.as_ptr());
+        assert!(!node.is_null());
+
+        assert_eq!(fcn_node_state(node), 0); // Initializing
+        assert_eq!(fcn_node_is_lead(node), 1);
+        assert_eq!(fcn_node_current_turn(node), 0);
+
+        let pk = fcn_node_player_pubkey(node);
+        assert!(!pk.is_null());
+        let pk_str = unsafe { CStr::from_ptr(pk) }.to_str().unwrap();
+        assert_eq!(pk_str, "player_abc");
+        crate::error::fcn_string_free(pk);
+
+        // Create lobby.
+        let lobby_id = std::ffi::CString::new("lobby_1").unwrap();
+        assert_eq!(fcn_node_create_lobby(node, lobby_id.as_ptr(), 4), 0);
+        assert_eq!(fcn_node_state(node), 1); // InLobby
+
+        // Start game.
+        let players = std::ffi::CString::new(r#"["alice","bob"]"#).unwrap();
+        assert_eq!(fcn_node_start_game(node, players.as_ptr()), 0);
+        assert_eq!(fcn_node_state(node), 2); // Connecting
+
+        // Connections ready.
+        assert_eq!(fcn_node_connections_ready(node), 0);
+        assert_eq!(fcn_node_state(node), 3); // Playing
+
+        // Begin turn.
+        assert_eq!(fcn_node_begin_turn(node, 1), 0);
+        assert_eq!(fcn_node_current_turn(node), 1);
+
+        // End game.
+        assert_eq!(fcn_node_end_game(node), 0);
+        assert_eq!(fcn_node_state(node), 4); // Finished
+
+        fcn_node_free(node);
+    }
+
+    #[test]
+    fn node_join_lobby_ffi() {
+        let cfg = make_node_config_json(false);
+        let node = fcn_node_new(cfg.as_ptr());
+        assert!(!node.is_null());
+
+        assert_eq!(fcn_node_is_lead(node), 0);
+
+        let lobby_id = std::ffi::CString::new("lobby_1").unwrap();
+        let lead_pk = std::ffi::CString::new("lead_pk").unwrap();
+        assert_eq!(
+            fcn_node_join_lobby(node, lobby_id.as_ptr(), lead_pk.as_ptr(), 4),
+            0
+        );
+        assert_eq!(fcn_node_state(node), 1); // InLobby
+
+        fcn_node_free(node);
+    }
+
+    #[test]
+    fn node_wrong_state_transitions_ffi() {
+        let cfg = make_node_config_json(true);
+        let node = fcn_node_new(cfg.as_ptr());
+        assert!(!node.is_null());
+
+        // Can't start game from Initializing.
+        let players = std::ffi::CString::new(r#"["alice"]"#).unwrap();
+        assert_eq!(fcn_node_start_game(node, players.as_ptr()), -1);
+
+        // Can't connections_ready from Initializing.
+        assert_eq!(fcn_node_connections_ready(node), -1);
+
+        // Can't begin_turn from Initializing.
+        assert_eq!(fcn_node_begin_turn(node, 1), -1);
+
+        fcn_node_free(node);
+    }
+
+    #[test]
+    fn node_null_safety() {
+        assert!(fcn_node_new(std::ptr::null()).is_null());
+        assert_eq!(fcn_node_state(std::ptr::null()), -1);
+        assert_eq!(
+            fcn_node_create_lobby(std::ptr::null_mut(), std::ptr::null(), 4),
+            -1
+        );
+        assert_eq!(
+            fcn_node_join_lobby(std::ptr::null_mut(), std::ptr::null(), std::ptr::null(), 4),
+            -1
+        );
+        assert_eq!(
+            fcn_node_start_game(std::ptr::null_mut(), std::ptr::null()),
+            -1
+        );
+        assert_eq!(fcn_node_connections_ready(std::ptr::null_mut()), -1);
+        assert_eq!(fcn_node_begin_turn(std::ptr::null_mut(), 1), -1);
+        assert_eq!(fcn_node_end_game(std::ptr::null_mut()), -1);
+        assert_eq!(fcn_node_current_turn(std::ptr::null()), -1);
+        assert!(fcn_node_player_pubkey(std::ptr::null()).is_null());
+        assert_eq!(fcn_node_is_lead(std::ptr::null()), -1);
+        fcn_node_free(std::ptr::null_mut()); // no-op
+    }
+
+    #[test]
+    fn node_invalid_config_json() {
+        let bad = std::ffi::CString::new("not json").unwrap();
+        assert!(fcn_node_new(bad.as_ptr()).is_null());
+    }
+
+    #[test]
+    fn node_invalid_phase_mode() {
+        let cfg = std::ffi::CString::new(
+            r#"{"player_pubkey":"pk","is_lead":true,"game_event_id":null,"phase_mode":99,"turn_timeout_secs":0,"checkpoint_interval":0}"#,
+        )
+        .unwrap();
+        assert!(fcn_node_new(cfg.as_ptr()).is_null());
+    }
+
+    #[test]
+    fn node_invalid_player_pubkeys_json() {
+        let cfg = make_node_config_json(true);
+        let node = fcn_node_new(cfg.as_ptr());
+        assert!(!node.is_null());
+
+        let lobby_id = std::ffi::CString::new("lobby_1").unwrap();
+        fcn_node_create_lobby(node, lobby_id.as_ptr(), 4);
+
+        let bad = std::ffi::CString::new("not json").unwrap();
+        assert_eq!(fcn_node_start_game(node, bad.as_ptr()), -1);
+
+        fcn_node_free(node);
     }
 }

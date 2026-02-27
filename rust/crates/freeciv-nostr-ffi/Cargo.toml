@@ -14,6 +14,7 @@ freeciv-nostr-net = { path = "../freeciv-nostr-net" }
 freeciv-nostr-verify = { path = "../freeciv-nostr-verify" }
 iroh = { workspace = true }
 libc = "0.2"
+serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 nostr = { workspace = true }
