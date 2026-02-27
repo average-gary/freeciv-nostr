@@ -1,4 +1,4 @@
-//! C FFI bindings for P2P networking (endpoint, gossip, blobs).
+//! C FFI bindings for P2P networking (endpoint, gossip, blobs, transport).
 //!
 //! All async operations are bridged to synchronous C calls via a shared
 //! tokio runtime. The runtime is created on the first call to any `fcn_net_*`
@@ -11,7 +11,7 @@
 //! across threads without external synchronization.
 
 use std::os::raw::c_char;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use tokio::runtime::Runtime;
 
@@ -21,6 +21,7 @@ use freeciv_nostr_net::gossip::{GameGossip, GameGossipReceiver, GameGossipSender
 use freeciv_nostr_net::lobby::GameLobby;
 use freeciv_nostr_net::message::FramedMessage;
 use freeciv_nostr_net::protocol::StreamId;
+use freeciv_nostr_net::transport::QuicTransport;
 
 use crate::error::{cstr_to_str, set_last_error, set_last_error_from, string_to_c};
 
@@ -76,6 +77,15 @@ pub struct FcnBlobs {
 /// Opaque handle to a game lobby.
 pub struct FcnLobby {
     inner: GameLobby,
+}
+
+/// Opaque handle to a QUIC transport instance.
+///
+/// Thread-safe: the inner `QuicTransport` is protected by a `Mutex`.
+/// All `fcn_transport_*` FFI functions lock this mutex for the duration
+/// of the call.
+pub struct FcnTransport {
+    inner: Mutex<QuicTransport>,
 }
 
 /// Gossip event type tag for C.
@@ -1309,6 +1319,676 @@ pub extern "C" fn fcn_lockstep_free(ls: *mut FcnLockstep) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Transport FFI
+// ---------------------------------------------------------------------------
+
+/// C-compatible poll entry, matching `struct fc_transport_poll_entry`.
+///
+/// Must be layout-compatible with the C struct defined in `utility/transport.h`.
+#[repr(C)]
+pub struct FcnTransportPollEntry {
+    /// The transport handle to monitor.
+    pub handle: i32,
+    /// Bitmask of requested events (`FC_TRANSPORT_READ`, etc.).
+    pub requested_events: i32,
+    /// Bitmask of returned events (output, set by poll).
+    pub returned_events: i32,
+}
+
+/// Create a new QUIC transport instance.
+///
+/// Returns an opaque handle, or `NULL` on error (check `fcn_last_error()`).
+/// The caller must free with `fcn_transport_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_new() -> *mut FcnTransport {
+    Box::into_raw(Box::new(FcnTransport {
+        inner: Mutex::new(QuicTransport::new()),
+    }))
+}
+
+/// Set up a listener on the transport and return the listener handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_setup_listener(transport: *mut FcnTransport) -> i32 {
+    if transport.is_null() {
+        set_last_error("null transport pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees transport was returned by fcn_transport_new().
+    let transport = unsafe { &*transport };
+    match transport.inner.lock() {
+        Ok(mut t) => t.setup_listener(),
+        Err(e) => {
+            set_last_error(&format!("transport mutex poisoned: {e}"));
+            -1
+        }
+    }
+}
+
+/// Accept an incoming connection on the transport. Blocks until available.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_accept(transport: *mut FcnTransport) -> i32 {
+    if transport.is_null() {
+        set_last_error("null transport pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees transport was returned by fcn_transport_new().
+    let transport = unsafe { &*transport };
+    match transport.inner.lock() {
+        Ok(mut t) => match block_on(t.accept()) {
+            Ok(handle) => handle,
+            Err(e) => {
+                set_last_error_from(e);
+                -1
+            }
+        },
+        Err(e) => {
+            set_last_error(&format!("transport mutex poisoned: {e}"));
+            -1
+        }
+    }
+}
+
+/// Close a stream or listener handle on the transport.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_close_handle(transport: *mut FcnTransport, handle: i32) {
+    if transport.is_null() {
+        return;
+    }
+    // SAFETY: Caller guarantees transport was returned by fcn_transport_new().
+    let transport = unsafe { &*transport };
+    if let Ok(mut t) = transport.inner.lock() {
+        t.close(handle);
+    }
+}
+
+/// Read from a transport stream. Returns bytes read, 0 on EOF, -1 on error.
+///
+/// # Safety
+///
+/// `buf` must point to a buffer of at least `len` bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_read(
+    transport: *mut FcnTransport,
+    handle: i32,
+    buf: *mut u8,
+    len: i32,
+) -> i32 {
+    if transport.is_null() {
+        set_last_error("null transport pointer");
+        return -1;
+    }
+    if buf.is_null() && len > 0 {
+        set_last_error("null buffer with non-zero length");
+        return -1;
+    }
+    if len < 0 {
+        set_last_error("negative length");
+        return -1;
+    }
+    // SAFETY: Caller guarantees transport is valid and buf points to len bytes.
+    let transport = unsafe { &*transport };
+    let slice = if len > 0 {
+        unsafe { std::slice::from_raw_parts_mut(buf, len as usize) }
+    } else {
+        &mut []
+    };
+    match transport.inner.lock() {
+        Ok(mut t) => match block_on(t.read(handle, slice)) {
+            Ok(n) => n as i32,
+            Err(e) => {
+                set_last_error_from(e);
+                -1
+            }
+        },
+        Err(e) => {
+            set_last_error(&format!("transport mutex poisoned: {e}"));
+            -1
+        }
+    }
+}
+
+/// Write to a transport stream. Returns bytes written, -1 on error.
+///
+/// # Safety
+///
+/// `buf` must point to a buffer of at least `len` bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_write(
+    transport: *mut FcnTransport,
+    handle: i32,
+    buf: *const u8,
+    len: i32,
+) -> i32 {
+    if transport.is_null() {
+        set_last_error("null transport pointer");
+        return -1;
+    }
+    if buf.is_null() && len > 0 {
+        set_last_error("null buffer with non-zero length");
+        return -1;
+    }
+    if len < 0 {
+        set_last_error("negative length");
+        return -1;
+    }
+    // SAFETY: Caller guarantees transport is valid and buf points to len bytes.
+    let transport = unsafe { &*transport };
+    let slice = if len > 0 {
+        unsafe { std::slice::from_raw_parts(buf, len as usize) }
+    } else {
+        &[]
+    };
+    match transport.inner.lock() {
+        Ok(mut t) => match block_on(t.write(handle, slice)) {
+            Ok(n) => n as i32,
+            Err(e) => {
+                set_last_error_from(e);
+                -1
+            }
+        },
+        Err(e) => {
+            set_last_error(&format!("transport mutex poisoned: {e}"));
+            -1
+        }
+    }
+}
+
+/// Poll transport handles for readiness. Returns ready count, -1 on error.
+///
+/// # Safety
+///
+/// `entries_ptr` must point to `count` valid `FcnTransportPollEntry` structs.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_poll_handles(
+    transport: *mut FcnTransport,
+    entries_ptr: *mut FcnTransportPollEntry,
+    count: i32,
+    timeout_ms: i32,
+) -> i32 {
+    if transport.is_null() {
+        set_last_error("null transport pointer");
+        return -1;
+    }
+    if entries_ptr.is_null() && count > 0 {
+        set_last_error("null entries with non-zero count");
+        return -1;
+    }
+    if count < 0 {
+        set_last_error("negative count");
+        return -1;
+    }
+    // SAFETY: Caller guarantees transport is valid and entries_ptr points to count entries.
+    let transport = unsafe { &*transport };
+    let c_entries = if count > 0 {
+        unsafe { std::slice::from_raw_parts_mut(entries_ptr, count as usize) }
+    } else {
+        &mut []
+    };
+    let mut rust_entries: Vec<freeciv_nostr_net::transport::PollEntry> = c_entries
+        .iter()
+        .map(|e| freeciv_nostr_net::transport::PollEntry {
+            handle: e.handle,
+            requested_events: e.requested_events as u32,
+            returned_events: 0,
+        })
+        .collect();
+    match transport.inner.lock() {
+        Ok(t) => {
+            let ready = t.poll(&mut rust_entries, timeout_ms);
+            for (c, r) in c_entries.iter_mut().zip(rust_entries.iter()) {
+                c.returned_events = r.returned_events as i32;
+            }
+            ready as i32
+        }
+        Err(e) => {
+            set_last_error(&format!("transport mutex poisoned: {e}"));
+            -1
+        }
+    }
+}
+
+/// Get the number of active streams on the transport. Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_stream_count(transport: *const FcnTransport) -> i32 {
+    if transport.is_null() {
+        set_last_error("null transport pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees transport was returned by fcn_transport_new().
+    let transport = unsafe { &*transport };
+    match transport.inner.lock() {
+        Ok(t) => t.stream_count() as i32,
+        Err(e) => {
+            set_last_error(&format!("transport mutex poisoned: {e}"));
+            -1
+        }
+    }
+}
+
+/// Free a transport instance. After this call the pointer must not be used.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_transport_free(transport: *mut FcnTransport) {
+    if !transport.is_null() {
+        // SAFETY: Caller guarantees transport was returned by fcn_transport_new().
+        unsafe {
+            let _ = Box::from_raw(transport);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validation FFI
+// ---------------------------------------------------------------------------
+
+/// Validate a single action's payload schema.
+///
+/// `action_json` is the JSON-serialized `PlayerAction`.
+/// Returns a JSON string describing the validation result, or `NULL` on error.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_validate_action(action_json: *const c_char) -> *mut c_char {
+    let json_str = match cstr_to_str(action_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let action: freeciv_nostr_core::actions::PlayerAction = match serde_json::from_str(json_str) {
+        Ok(a) => a,
+        Err(e) => {
+            set_last_error(&format!("invalid action JSON: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let result = freeciv_nostr_net::validation::validate_schema(&action);
+    match serde_json::to_string(&result) {
+        Ok(s) => string_to_c(s),
+        Err(e) => {
+            set_last_error_from(e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Validate a batch of actions.
+///
+/// `player_pubkey_hex` is the player's pubkey.
+/// `actions_json` is a JSON array of `PlayerAction` objects.
+/// Returns a JSON string with the `BatchValidationResult`, or `NULL` on error.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_validate_action_batch(
+    player_pubkey_hex: *const c_char,
+    turn: u32,
+    actions_json: *const c_char,
+) -> *mut c_char {
+    let pk = match cstr_to_str(player_pubkey_hex) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let json_str = match cstr_to_str(actions_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let actions: Vec<freeciv_nostr_core::actions::PlayerAction> =
+        match serde_json::from_str(json_str) {
+            Ok(a) => a,
+            Err(e) => {
+                set_last_error(&format!("invalid actions JSON: {e}"));
+                return std::ptr::null_mut();
+            }
+        };
+    let result = freeciv_nostr_net::validation::validate_action_batch(pk, turn, &actions);
+    match serde_json::to_string(&result) {
+        Ok(s) => string_to_c(s),
+        Err(e) => {
+            set_last_error_from(e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Opaque handle to a consensus validator.
+pub struct FcnConsensusValidator {
+    inner: freeciv_nostr_net::validation::ConsensusValidator,
+}
+
+/// Create a new consensus validator.
+///
+/// `num_nodes` is the total number of nodes in the game.
+/// The caller must free with `fcn_consensus_validator_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_consensus_validator_new(num_nodes: u32) -> *mut FcnConsensusValidator {
+    Box::into_raw(Box::new(FcnConsensusValidator {
+        inner: freeciv_nostr_net::validation::ConsensusValidator::new(num_nodes as usize),
+    }))
+}
+
+/// Submit a validation vote from a node.
+///
+/// `result_json` is the JSON-serialized `ValidationResult`.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_consensus_validator_submit_vote(
+    cv: *mut FcnConsensusValidator,
+    player_pubkey: *const c_char,
+    action_index: u32,
+    node_pubkey: *const c_char,
+    result_json: *const c_char,
+) -> i32 {
+    if cv.is_null() {
+        set_last_error("null consensus validator pointer");
+        return -1;
+    }
+    let player_pk = match cstr_to_str(player_pubkey) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let node_pk = match cstr_to_str(node_pubkey) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let result_str = match cstr_to_str(result_json) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let result: freeciv_nostr_net::validation::ValidationResult =
+        match serde_json::from_str(result_str) {
+            Ok(r) => r,
+            Err(e) => {
+                set_last_error(&format!("invalid result JSON: {e}"));
+                return -1;
+            }
+        };
+    // SAFETY: Caller guarantees cv is valid.
+    let cv = unsafe { &mut *cv };
+    cv.inner
+        .submit_vote(player_pk, action_index as usize, node_pk, result);
+    0
+}
+
+/// Get the consensus decision for an action.
+///
+/// Returns a JSON string with the `ConsensusDecision`, or `NULL` on error.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_consensus_validator_decide(
+    cv: *const FcnConsensusValidator,
+    player_pubkey: *const c_char,
+    action_index: u32,
+) -> *mut c_char {
+    if cv.is_null() {
+        set_last_error("null consensus validator pointer");
+        return std::ptr::null_mut();
+    }
+    let player_pk = match cstr_to_str(player_pubkey) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    // SAFETY: Caller guarantees cv is valid.
+    let cv = unsafe { &*cv };
+    let decision = cv.inner.decide(player_pk, action_index as usize);
+    match serde_json::to_string(&decision) {
+        Ok(s) => string_to_c(s),
+        Err(e) => {
+            set_last_error_from(e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Free a consensus validator handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_consensus_validator_free(cv: *mut FcnConsensusValidator) {
+    if !cv.is_null() {
+        // SAFETY: Caller guarantees cv was returned by fcn_consensus_validator_new.
+        unsafe {
+            let _ = Box::from_raw(cv);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Desync Detection FFI
+// ---------------------------------------------------------------------------
+
+/// Opaque handle to a desync detector.
+pub struct FcnDesyncDetector {
+    inner: freeciv_nostr_net::desync::DesyncDetector,
+}
+
+/// Create a new desync detector.
+///
+/// `player_pubkeys_json` is a JSON array of player public key hex strings.
+/// The caller must free with `fcn_desync_detector_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_detector_new(
+    checkpoint_interval: u32,
+    max_checkpoints: u32,
+    player_pubkeys_json: *const c_char,
+) -> *mut FcnDesyncDetector {
+    let json_str = match cstr_to_str(player_pubkeys_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let pubkeys: Vec<String> = match serde_json::from_str(json_str) {
+        Ok(p) => p,
+        Err(e) => {
+            set_last_error(&format!("invalid player pubkeys JSON: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+    let config = freeciv_nostr_net::desync::DesyncConfig {
+        checkpoint_interval,
+        max_checkpoints: max_checkpoints as usize,
+        player_pubkeys: pubkeys,
+    };
+    Box::into_raw(Box::new(FcnDesyncDetector {
+        inner: freeciv_nostr_net::desync::DesyncDetector::new(config),
+    }))
+}
+
+/// Record a state hash from a player for a given turn.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_record_hash(
+    detector: *mut FcnDesyncDetector,
+    turn: u32,
+    player_pubkey: *const c_char,
+    state_hash: *const c_char,
+) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    let pk = match cstr_to_str(player_pubkey) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let hash = match cstr_to_str(state_hash) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &mut *detector };
+    detector.inner.record_hash(turn, pk, hash);
+    0
+}
+
+/// Check desync status for a turn.
+/// Returns a JSON string with the `DesyncStatus`, or `NULL` on error.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_check_turn(
+    detector: *const FcnDesyncDetector,
+    turn: u32,
+) -> *mut c_char {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &*detector };
+    let status = detector.inner.check_turn(turn);
+    match serde_json::to_string(&status) {
+        Ok(s) => string_to_c(s),
+        Err(e) => {
+            set_last_error_from(e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Mark a turn as in-sync.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_mark_in_sync(detector: *mut FcnDesyncDetector, turn: u32) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &mut *detector };
+    detector.inner.mark_in_sync(turn);
+    0
+}
+
+/// Get the last turn where all nodes were in sync.
+/// Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_last_sync_turn(detector: *const FcnDesyncDetector) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &*detector };
+    detector.inner.last_sync_turn() as i32
+}
+
+/// Store a recovery checkpoint.
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_store_checkpoint(
+    detector: *mut FcnDesyncDetector,
+    turn: u32,
+    state_hash: *const c_char,
+    blob_hash: *const c_char,
+    agreement_count: u32,
+) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    let sh = match cstr_to_str(state_hash) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let bh = match cstr_to_str(blob_hash) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &mut *detector };
+    detector
+        .inner
+        .store_checkpoint(freeciv_nostr_net::desync::RecoveryCheckpoint {
+            turn,
+            state_hash: sh.to_string(),
+            blob_hash: bh.to_string(),
+            agreement_count: agreement_count as usize,
+        });
+    0
+}
+
+/// Check if a checkpoint should be created at this turn.
+/// Returns 1 if yes, 0 if no, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_should_checkpoint(
+    detector: *const FcnDesyncDetector,
+    turn: u32,
+) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &*detector };
+    if detector.inner.should_checkpoint(turn) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Determine the recovery strategy for a desync at the given turn.
+/// Returns a JSON string with the `RecoveryStrategy`, or `NULL` on error.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_determine_recovery(
+    detector: *const FcnDesyncDetector,
+    turn: u32,
+) -> *mut c_char {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &*detector };
+    let status = detector.inner.check_turn(turn);
+    let strategy = detector.inner.determine_recovery(&status);
+    match serde_json::to_string(&strategy) {
+        Ok(s) => string_to_c(s),
+        Err(e) => {
+            set_last_error_from(e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Find the divergence turn using binary search.
+/// Returns the turn number, or -1 if not found or on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_find_divergence(
+    detector: *const FcnDesyncDetector,
+    start: u32,
+    end: u32,
+) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &*detector };
+    match detector.inner.find_divergence_turn(start, end) {
+        Some(turn) => turn as i32,
+        None => -1,
+    }
+}
+
+/// Get the number of stored checkpoints.
+/// Returns -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_checkpoint_count(detector: *const FcnDesyncDetector) -> i32 {
+    if detector.is_null() {
+        set_last_error("null detector pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees detector is valid.
+    let detector = unsafe { &*detector };
+    detector.inner.checkpoint_count() as i32
+}
+
+/// Free a desync detector handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_desync_detector_free(detector: *mut FcnDesyncDetector) {
+    if !detector.is_null() {
+        // SAFETY: Caller guarantees detector was returned by fcn_desync_detector_new.
+        unsafe {
+            let _ = Box::from_raw(detector);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1807,5 +2487,153 @@ mod tests {
         assert_eq!(r, FcnTurnResult::Error);
 
         fcn_lockstep_free(ls);
+    }
+
+    // -- Transport FFI tests -----------------------------------------------
+
+    #[test]
+    fn transport_lifecycle() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null(), "transport creation failed");
+        assert_eq!(fcn_transport_stream_count(t), 0);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_setup_listener() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        let lh = fcn_transport_setup_listener(t);
+        assert!(lh >= 0, "listener handle should be non-negative");
+        assert_eq!(fcn_transport_stream_count(t), 0);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_close_unknown_handle() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        fcn_transport_close_handle(t, 999);
+        assert_eq!(fcn_transport_stream_count(t), 0);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_poll_empty() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        assert_eq!(fcn_transport_poll_handles(t, std::ptr::null_mut(), 0, 0), 0);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_poll_unknown_handle() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        let mut entry = FcnTransportPollEntry {
+            handle: 999,
+            requested_events: 0x01,
+            returned_events: 0,
+        };
+        assert_eq!(fcn_transport_poll_handles(t, &mut entry, 1, 0), 0);
+        assert_eq!(entry.returned_events, 0);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_poll_listener_no_pending() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        let lh = fcn_transport_setup_listener(t);
+        let mut entry = FcnTransportPollEntry {
+            handle: lh,
+            requested_events: 0x01,
+            returned_events: 0,
+        };
+        assert_eq!(fcn_transport_poll_handles(t, &mut entry, 1, 0), 0);
+        assert_eq!(entry.returned_events, 0);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_read_unknown_handle() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        let mut buf = [0u8; 64];
+        assert_eq!(fcn_transport_read(t, 999, buf.as_mut_ptr(), 64), -1);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_write_unknown_handle() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        assert_eq!(fcn_transport_write(t, 999, b"hello".as_ptr(), 5), -1);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_null_safety() {
+        assert_eq!(fcn_transport_setup_listener(std::ptr::null_mut()), -1);
+        assert_eq!(fcn_transport_accept(std::ptr::null_mut()), -1);
+        fcn_transport_close_handle(std::ptr::null_mut(), 0);
+        assert_eq!(
+            fcn_transport_read(std::ptr::null_mut(), 0, std::ptr::null_mut(), 0),
+            -1
+        );
+        assert_eq!(
+            fcn_transport_write(std::ptr::null_mut(), 0, std::ptr::null(), 0),
+            -1
+        );
+        assert_eq!(
+            fcn_transport_poll_handles(std::ptr::null_mut(), std::ptr::null_mut(), 0, 0),
+            -1
+        );
+        assert_eq!(fcn_transport_stream_count(std::ptr::null()), -1);
+        fcn_transport_free(std::ptr::null_mut());
+    }
+
+    #[test]
+    fn transport_read_null_buf_with_len() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        assert_eq!(fcn_transport_read(t, 0, std::ptr::null_mut(), 10), -1);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_write_null_buf_with_len() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        assert_eq!(fcn_transport_write(t, 0, std::ptr::null(), 10), -1);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_read_negative_len() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        let mut buf = [0u8; 8];
+        assert_eq!(fcn_transport_read(t, 0, buf.as_mut_ptr(), -1), -1);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_write_negative_len() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        assert_eq!(fcn_transport_write(t, 0, [0u8; 8].as_ptr(), -1), -1);
+        fcn_transport_free(t);
+    }
+
+    #[test]
+    fn transport_poll_negative_count() {
+        let t = fcn_transport_new();
+        assert!(!t.is_null());
+        assert_eq!(
+            fcn_transport_poll_handles(t, std::ptr::null_mut(), -1, 0),
+            -1
+        );
+        fcn_transport_free(t);
     }
 }

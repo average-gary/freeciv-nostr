@@ -2,6 +2,7 @@
 //! ephemeral endpoints, gossip channels, and blob transfer.
 
 pub mod blobs;
+pub mod desync;
 pub mod endpoint;
 pub mod error;
 pub mod gossip;
@@ -9,3 +10,5 @@ pub mod lobby;
 pub mod lockstep;
 pub mod message;
 pub mod protocol;
+pub mod transport;
+pub mod validation;
