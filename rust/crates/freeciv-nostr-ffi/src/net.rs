@@ -18,6 +18,7 @@ use tokio::runtime::Runtime;
 use freeciv_nostr_net::blobs::GameBlobs;
 use freeciv_nostr_net::endpoint::GameEndpoint;
 use freeciv_nostr_net::gossip::{GameGossip, GameGossipReceiver, GameGossipSender, GossipEvent};
+use freeciv_nostr_net::lobby::GameLobby;
 use freeciv_nostr_net::message::FramedMessage;
 use freeciv_nostr_net::protocol::StreamId;
 
@@ -70,6 +71,11 @@ pub struct FcnGossipReceiver {
 /// Opaque handle to a blob store.
 pub struct FcnBlobs {
     inner: GameBlobs,
+}
+
+/// Opaque handle to a game lobby.
+pub struct FcnLobby {
+    inner: GameLobby,
 }
 
 /// Gossip event type tag for C.
@@ -733,6 +739,171 @@ pub extern "C" fn fcn_blobs_free(blobs: *mut FcnBlobs) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Lobby FFI
+// ---------------------------------------------------------------------------
+
+/// Create a new game lobby.
+///
+/// `lobby_id`: unique game identifier (C string).
+/// `lead_pk`: hex-encoded Nostr pubkey of the lobby creator (C string).
+/// `max_players`: maximum number of players.
+///
+/// Returns an opaque handle, or `NULL` on error (check `fcn_last_error()`).
+/// The caller must free with `fcn_lobby_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lobby_new(
+    lobby_id: *const c_char,
+    lead_pk: *const c_char,
+    max_players: u8,
+) -> *mut FcnLobby {
+    let lid = match cstr_to_str(lobby_id) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    let lead = match cstr_to_str(lead_pk) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    Box::into_raw(Box::new(FcnLobby {
+        inner: GameLobby::new(lid, lead, max_players),
+    }))
+}
+
+/// Accept a player into the lobby.
+///
+/// `pk`: hex-encoded Nostr pubkey (C string).
+/// `addr`: JSON-serialised Iroh `EndpointAddr` (C string).
+/// `accept_id`: hex-encoded Nostr event ID of the accept event (C string).
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lobby_accept_player(
+    lobby: *mut FcnLobby,
+    pk: *const c_char,
+    addr: *const c_char,
+    accept_id: *const c_char,
+) -> i32 {
+    if lobby.is_null() {
+        set_last_error("null lobby pointer");
+        return -1;
+    }
+    let pk_str = match cstr_to_str(pk) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let addr_str = match cstr_to_str(addr) {
+        Some(s) => s,
+        None => return -1,
+    };
+    let accept_str = match cstr_to_str(accept_id) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees lobby is valid.
+    let lobby = unsafe { &mut *lobby };
+    match lobby.inner.accept_player(pk_str, addr_str, accept_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Transition the lobby to the Started state.
+///
+/// `lead_pk`: hex-encoded Nostr pubkey of the lead player (C string).
+/// Only the lead may start the lobby.
+///
+/// Returns 0 on success, -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lobby_start(lobby: *mut FcnLobby, lead_pk: *const c_char) -> i32 {
+    if lobby.is_null() {
+        set_last_error("null lobby pointer");
+        return -1;
+    }
+    let lead = match cstr_to_str(lead_pk) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees lobby is valid.
+    let lobby = unsafe { &mut *lobby };
+    match lobby.inner.start(lead) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Get the number of accepted players in the lobby.
+///
+/// Returns -1 on error (null pointer).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lobby_player_count(lobby: *const FcnLobby) -> i32 {
+    if lobby.is_null() {
+        set_last_error("null lobby pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees lobby is valid.
+    let lobby = unsafe { &*lobby };
+    lobby.inner.player_count() as i32
+}
+
+/// Connect our endpoint to every accepted lobby peer.
+///
+/// Skips `our_pk` (hex-encoded Nostr pubkey) when iterating through
+/// accepted players. Returns the number of successful connections,
+/// or -1 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lobby_connect_peers(
+    lobby: *const FcnLobby,
+    ep: *const FcnEndpoint,
+    our_pk: *const c_char,
+) -> i32 {
+    if lobby.is_null() {
+        set_last_error("null lobby pointer");
+        return -1;
+    }
+    if ep.is_null() {
+        set_last_error("null endpoint pointer");
+        return -1;
+    }
+    let pk_str = match cstr_to_str(our_pk) {
+        Some(s) => s,
+        None => return -1,
+    };
+    // SAFETY: Caller guarantees lobby and ep are valid.
+    let lobby = unsafe { &*lobby };
+    let ep = unsafe { &*ep };
+    match block_on(freeciv_nostr_net::lobby::connect_to_lobby_peers(
+        &lobby.inner,
+        &ep.inner,
+        pk_str,
+    )) {
+        Ok(n) => n as i32,
+        Err(e) => {
+            set_last_error_from(e);
+            -1
+        }
+    }
+}
+
+/// Free a lobby handle.
+///
+/// After this call the handle must not be used.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lobby_free(lobby: *mut FcnLobby) {
+    if !lobby.is_null() {
+        // SAFETY: Caller guarantees lobby was returned by fcn_lobby_new.
+        unsafe {
+            let _ = Box::from_raw(lobby);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -918,5 +1089,71 @@ mod tests {
     fn gossip_new_null_safety() {
         let game_id = std::ffi::CString::new("test").unwrap();
         assert!(fcn_gossip_new(std::ptr::null(), game_id.as_ptr()).is_null());
+    }
+
+    // -- Lobby FFI ---------------------------------------------------------
+
+    #[test]
+    fn lobby_lifecycle() {
+        let lid = std::ffi::CString::new("lobby-1").unwrap();
+        let lead = std::ffi::CString::new("lead_pk").unwrap();
+        let lobby = fcn_lobby_new(lid.as_ptr(), lead.as_ptr(), 4);
+        assert!(!lobby.is_null());
+
+        assert_eq!(fcn_lobby_player_count(lobby), 0);
+
+        let pk = std::ffi::CString::new("pk1").unwrap();
+        let addr = std::ffi::CString::new("{}").unwrap();
+        let eid = std::ffi::CString::new("evt1").unwrap();
+        assert_eq!(
+            fcn_lobby_accept_player(lobby, pk.as_ptr(), addr.as_ptr(), eid.as_ptr()),
+            0
+        );
+        assert_eq!(fcn_lobby_player_count(lobby), 1);
+
+        assert_eq!(fcn_lobby_start(lobby, lead.as_ptr()), 0);
+
+        fcn_lobby_free(lobby);
+    }
+
+    #[test]
+    fn lobby_new_null_safety() {
+        assert!(fcn_lobby_new(std::ptr::null(), std::ptr::null(), 4).is_null());
+    }
+
+    #[test]
+    fn lobby_accept_null_safety() {
+        assert_eq!(
+            fcn_lobby_accept_player(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null()
+            ),
+            -1
+        );
+    }
+
+    #[test]
+    fn lobby_start_null_safety() {
+        assert_eq!(fcn_lobby_start(std::ptr::null_mut(), std::ptr::null()), -1);
+    }
+
+    #[test]
+    fn lobby_player_count_null_safety() {
+        assert_eq!(fcn_lobby_player_count(std::ptr::null()), -1);
+    }
+
+    #[test]
+    fn lobby_connect_peers_null_safety() {
+        assert_eq!(
+            fcn_lobby_connect_peers(std::ptr::null(), std::ptr::null(), std::ptr::null()),
+            -1
+        );
+    }
+
+    #[test]
+    fn lobby_free_null() {
+        fcn_lobby_free(std::ptr::null_mut()); // no-op
     }
 }

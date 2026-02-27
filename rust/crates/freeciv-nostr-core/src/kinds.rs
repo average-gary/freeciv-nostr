@@ -69,6 +69,15 @@ pub const GAME_DIPLOMACY: Kind = Kind::Custom(4205);
 /// Tags: `e` (game start event), `turn`
 pub const GAME_END: Kind = Kind::Custom(4206);
 
+/// Game Start (kind 4207)
+///
+/// Published by the lobby lead when all players have accepted and the
+/// game is ready to begin. Contains deterministic seeds and the
+/// canonical player order so every node starts from the same state.
+///
+/// Tags: `e` (lobby event ID), `p` (each player pubkey)
+pub const GAME_START: Kind = Kind::Custom(4207);
+
 // ---- Ephemeral Events ----
 // NOTE: Per NIP-01, only kinds 20000-29999 are treated as ephemeral by
 // relays (not stored). Kind 14200 (HEARTBEAT) falls outside this range
@@ -121,6 +130,7 @@ pub fn kind_name(kind: Kind) -> &'static str {
         k if k == GAME_CHAT => "GameChat",
         k if k == GAME_DIPLOMACY => "GameDiplomacy",
         k if k == GAME_END => "GameEnd",
+        k if k == GAME_START => "GameStart",
         k if k == HEARTBEAT => "Heartbeat",
         k if k == STATE_SYNC => "StateSync",
         k if k == PLAYER_PROFILE => "PlayerProfile",
@@ -138,6 +148,7 @@ pub fn is_freeciv_kind(kind: Kind) -> bool {
         || kind == GAME_CHAT
         || kind == GAME_DIPLOMACY
         || kind == GAME_END
+        || kind == GAME_START
         || kind == HEARTBEAT
         || kind == STATE_SYNC
         || kind == PLAYER_PROFILE
@@ -153,6 +164,7 @@ pub const REGULAR_KINDS: &[Kind] = &[
     GAME_CHAT,
     GAME_DIPLOMACY,
     GAME_END,
+    GAME_START,
 ];
 
 /// All kinds that should be pre-approved for NIP-46 signing
@@ -178,6 +190,7 @@ mod tests {
         assert_eq!(GAME_CHAT.as_u16(), 4204);
         assert_eq!(GAME_DIPLOMACY.as_u16(), 4205);
         assert_eq!(GAME_END.as_u16(), 4206);
+        assert_eq!(GAME_START.as_u16(), 4207);
         assert_eq!(HEARTBEAT.as_u16(), 14200);
         assert_eq!(STATE_SYNC.as_u16(), 24200);
         assert_eq!(PLAYER_PROFILE.as_u16(), 30420);
@@ -200,6 +213,13 @@ mod tests {
         assert!(is_freeciv_kind(PLAYER_PROFILE));
         assert!(!is_freeciv_kind(Kind::Custom(9999)));
         assert!(!is_freeciv_kind(Kind::TextNote));
+    }
+
+    #[test]
+    fn game_start_kind_is_recognised() {
+        assert_eq!(kind_name(GAME_START), "GameStart");
+        assert!(is_freeciv_kind(GAME_START));
+        assert!(REGULAR_KINDS.contains(&GAME_START));
     }
 
     #[test]
