@@ -9,6 +9,8 @@ pub mod gossip;
 pub mod lobby;
 pub mod lockstep;
 pub mod message;
+pub mod node;
 pub mod protocol;
+pub mod relay;
 pub mod transport;
 pub mod validation;

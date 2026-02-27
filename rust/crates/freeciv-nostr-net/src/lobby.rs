@@ -76,6 +76,7 @@ pub struct AcceptedPlayer {
 /// lobby), the maximum number of players, and the set of players who have
 /// accepted. State transitions follow: `Open` -> `Ready` | `Started` |
 /// `Cancelled`.
+#[derive(Debug)]
 pub struct GameLobby {
     lobby_id: String,
     lead_pubkey_hex: String,

@@ -88,6 +88,7 @@ pub struct StateHashSubmission {
 // ---------------------------------------------------------------------------
 
 /// Configuration for a lockstep session.
+#[derive(Debug)]
 pub struct LockstepConfig {
     /// Action-submission mode.
     pub phase_mode: PhaseMode,
@@ -163,6 +164,7 @@ pub enum LockstepError {
 ///
 /// Tracks per-turn commitments, reveals, and state hashes, and drives
 /// phase transitions.
+#[derive(Debug)]
 pub struct LockstepProtocol {
     config: LockstepConfig,
     turn: u32,

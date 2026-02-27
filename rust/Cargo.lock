@@ -1275,6 +1275,7 @@ dependencies = [
  "iroh 0.96.0",
  "libc",
  "nostr",
+ "serde",
  "serde_json",
  "tokio",
 ]
