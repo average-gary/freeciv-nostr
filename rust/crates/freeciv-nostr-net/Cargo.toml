@@ -16,12 +16,8 @@ rand = { workspace = true }
 bytes = { workspace = true }
 futures-lite = "2"
 tracing = { workspace = true }
-
-# Planned for later phases:
-# freeciv-nostr-core = { path = "../freeciv-nostr-core" }
-# serde = { workspace = true }
-# serde_json = { workspace = true }
-# hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

@@ -36,6 +36,22 @@ pub struct StateHash {
     pub hash: String,
 }
 
+/// Parameters for a GAME_START event.
+///
+/// Contains the deterministic seeds and player order needed so that
+/// every node begins from the exact same initial game state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameStartParams {
+    /// Map generation seed.
+    pub map_seed: u64,
+    /// Game randomness seed.
+    pub game_seed: u64,
+    /// Canonical player order (hex-encoded Nostr pubkeys).
+    pub player_order: Vec<String>,
+    /// Ruleset name (e.g., "civ2civ3").
+    pub ruleset: String,
+}
+
 /// Summary published when a game ends.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameEndSummary {
@@ -164,6 +180,26 @@ pub fn build_end_event(game_event_id: EventId, end_summary: &GameEndSummary) -> 
         Tag::event(game_event_id),
         Tag::custom(TagKind::custom("turn"), vec![end_summary.turn.to_string()]),
     ])
+}
+
+/// Build a GAME_START event (kind 4207).
+///
+/// Published by the lobby lead when all accepted players are ready.
+/// `lobby_event_id` references the original lobby event.
+/// `players` are the Nostr public keys included as `p` tags.
+pub fn build_start_event(
+    lobby_event_id: EventId,
+    params: &GameStartParams,
+    players: &[PublicKey],
+) -> EventBuilder {
+    let content = serde_json::to_string(params).expect("GameStartParams serialization");
+
+    let mut tags: Vec<Tag> = vec![Tag::event(lobby_event_id)];
+    for pk in players {
+        tags.push(Tag::public_key(*pk));
+    }
+
+    EventBuilder::new(kinds::GAME_START, content).tags(tags)
 }
 
 /// Build a HEARTBEAT event (kind 14200, ephemeral).
@@ -426,6 +462,54 @@ mod tests {
         assert_eq!(parsed.phase, 1);
         assert_eq!(parsed.sequence, 7);
         assert_eq!(parsed.prev_event_id, "abcdef");
+    }
+
+    #[test]
+    fn game_start_params_serialization() {
+        let params = GameStartParams {
+            map_seed: 12345,
+            game_seed: 67890,
+            player_order: vec!["aabb".to_string(), "ccdd".to_string()],
+            ruleset: "civ2civ3".to_string(),
+        };
+        let json = serde_json::to_string(&params).expect("serialize");
+        let deserialized: GameStartParams = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(params, deserialized);
+    }
+
+    #[test]
+    fn build_start_event_has_correct_kind_and_tags() {
+        let lobby_id = EventId::all_zeros();
+        let keys = Keys::generate();
+        let player1 = Keys::generate().public_key();
+        let player2 = Keys::generate().public_key();
+        let params = GameStartParams {
+            map_seed: 1,
+            game_seed: 2,
+            player_order: vec!["pk1".to_string(), "pk2".to_string()],
+            ruleset: "classic".to_string(),
+        };
+        let builder = build_start_event(lobby_id, &params, &[player1, player2]);
+        let unsigned = builder.build(keys.public_key());
+        assert_eq!(unsigned.kind, kinds::GAME_START);
+
+        // Should have e-tag and two p-tags
+        let has_e_tag = unsigned
+            .tags
+            .iter()
+            .any(|t| t.as_slice().first().map(|s| s.as_str()) == Some("e"));
+        assert!(has_e_tag);
+        let p_count = unsigned
+            .tags
+            .iter()
+            .filter(|t| t.as_slice().first().map(|s| s.as_str()) == Some("p"))
+            .count();
+        assert_eq!(p_count, 2);
+
+        // Content should round-trip
+        let parsed: GameStartParams = serde_json::from_str(&unsigned.content).expect("valid JSON");
+        assert_eq!(parsed.ruleset, "classic");
+        assert_eq!(parsed.map_seed, 1);
     }
 
     #[test]
