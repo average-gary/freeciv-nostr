@@ -50,6 +50,14 @@ impl GameEndpoint {
         })
     }
 
+    /// Get a reference to the underlying [`iroh::Endpoint`].
+    ///
+    /// Used by the gossip layer to spawn its protocol actor on the same
+    /// QUIC endpoint.
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
     /// Get this endpoint's [`EndpointId`] (for publishing in Game Accept events).
     pub fn endpoint_id(&self) -> EndpointId {
         self.endpoint_id
