@@ -1285,6 +1285,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures-lite",
+ "hex",
  "iroh 0.96.0",
  "iroh-blobs",
  "iroh-gossip",

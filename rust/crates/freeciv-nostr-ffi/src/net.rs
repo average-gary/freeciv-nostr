@@ -904,6 +904,411 @@ pub extern "C" fn fcn_lobby_free(lobby: *mut FcnLobby) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Lockstep FFI
+// ---------------------------------------------------------------------------
+
+use freeciv_nostr_net::lockstep::{
+    ActionCommitment, ActionReveal, LockstepConfig, LockstepProtocol, PhaseMode,
+    StateHashSubmission, TurnAdvanceResult, TurnPhase,
+};
+use std::time::Duration;
+
+/// Phase mode for C consumers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum FcnPhaseMode {
+    /// All players act simultaneously (commit-reveal).
+    Concurrent = 0,
+    /// Players take turns one at a time.
+    PlayersAlternate = 1,
+    /// Teams take turns.
+    TeamsAlternate = 2,
+}
+
+/// Turn phase for C consumers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FcnTurnPhase {
+    /// Waiting for commitments.
+    Commit = 0,
+    /// Waiting for reveals.
+    Reveal = 1,
+    /// Actions are being applied.
+    Apply = 2,
+    /// Waiting for state hash verification.
+    Verify = 3,
+    /// Turn is complete.
+    Complete = 4,
+}
+
+/// Outcome tag for lockstep operations, for C consumers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FcnTurnResult {
+    /// Still waiting for other players.
+    Waiting = 0,
+    /// All players submitted; phase advances.
+    Ready = 1,
+    /// A reveal did not match its commitment.
+    RevealMismatch = 2,
+    /// Players disagree on the post-apply state.
+    DesyncDetected = 3,
+    /// The current phase has timed out.
+    Timeout = 4,
+    /// An error occurred (check `fcn_last_error()`).
+    Error = 5,
+}
+
+/// Opaque handle to a lockstep protocol instance.
+pub struct FcnLockstep {
+    inner: LockstepProtocol,
+}
+
+impl From<TurnPhase> for FcnTurnPhase {
+    fn from(p: TurnPhase) -> Self {
+        match p {
+            TurnPhase::Commit => FcnTurnPhase::Commit,
+            TurnPhase::Reveal => FcnTurnPhase::Reveal,
+            TurnPhase::Apply => FcnTurnPhase::Apply,
+            TurnPhase::Verify => FcnTurnPhase::Verify,
+            TurnPhase::Complete => FcnTurnPhase::Complete,
+        }
+    }
+}
+
+fn turn_advance_to_ffi(result: TurnAdvanceResult) -> FcnTurnResult {
+    match result {
+        TurnAdvanceResult::Waiting { .. } => FcnTurnResult::Waiting,
+        TurnAdvanceResult::Ready => FcnTurnResult::Ready,
+        TurnAdvanceResult::RevealMismatch { .. } => FcnTurnResult::RevealMismatch,
+        TurnAdvanceResult::DesyncDetected { .. } => FcnTurnResult::DesyncDetected,
+        TurnAdvanceResult::Timeout { .. } => FcnTurnResult::Timeout,
+    }
+}
+
+/// Create a new lockstep protocol instance.
+///
+/// `phase_mode`: 0=Concurrent, 1=PlayersAlternate, 2=TeamsAlternate.
+/// `timeout_ms`: per-phase timeout in milliseconds. 0 means no timeout.
+/// `player_pubkeys_json`: JSON array of hex-encoded player pubkeys,
+///   e.g. `["pk1","pk2"]`.
+///
+/// Returns an opaque handle, or `NULL` on error.
+/// The caller must free with `fcn_lockstep_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_new(
+    phase_mode: u8,
+    timeout_ms: u64,
+    player_pubkeys_json: *const c_char,
+) -> *mut FcnLockstep {
+    let mode = match phase_mode {
+        0 => PhaseMode::Concurrent,
+        1 => PhaseMode::PlayersAlternate,
+        2 => PhaseMode::TeamsAlternate,
+        other => {
+            set_last_error(&format!("invalid phase_mode: {other}"));
+            return std::ptr::null_mut();
+        }
+    };
+
+    let json_str = match cstr_to_str(player_pubkeys_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+
+    let pubkeys: Vec<String> = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(&format!("invalid player_pubkeys_json: {e}"));
+            return std::ptr::null_mut();
+        }
+    };
+
+    let timeout = if timeout_ms == 0 {
+        None
+    } else {
+        Some(Duration::from_millis(timeout_ms))
+    };
+
+    let config = LockstepConfig {
+        phase_mode: mode,
+        turn_timeout: timeout,
+        player_pubkeys: pubkeys,
+    };
+
+    Box::into_raw(Box::new(FcnLockstep {
+        inner: LockstepProtocol::new(config),
+    }))
+}
+
+/// Begin a new turn.
+///
+/// Returns 0 on success, -1 on error (null pointer).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_begin_turn(ls: *mut FcnLockstep, turn: u32) -> i32 {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &mut *ls };
+    ls.inner.begin_turn(turn);
+    0
+}
+
+/// Submit a commitment for a player.
+///
+/// Returns a `FcnTurnResult` tag. On error returns `FcnTurnResult::Error`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_submit_commitment(
+    ls: *mut FcnLockstep,
+    player_pk: *const c_char,
+    hash: *const c_char,
+    turn: u32,
+) -> FcnTurnResult {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return FcnTurnResult::Error;
+    }
+    let pk = match cstr_to_str(player_pk) {
+        Some(s) => s,
+        None => return FcnTurnResult::Error,
+    };
+    let h = match cstr_to_str(hash) {
+        Some(s) => s,
+        None => return FcnTurnResult::Error,
+    };
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &mut *ls };
+    match ls.inner.submit_commitment(ActionCommitment {
+        hash: h.to_string(),
+        turn,
+        player_pubkey: pk.to_string(),
+    }) {
+        Ok(r) => turn_advance_to_ffi(r),
+        Err(e) => {
+            set_last_error_from(e);
+            FcnTurnResult::Error
+        }
+    }
+}
+
+/// Submit a reveal for a player.
+///
+/// Returns a `FcnTurnResult` tag. On error returns `FcnTurnResult::Error`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_submit_reveal(
+    ls: *mut FcnLockstep,
+    player_pk: *const c_char,
+    actions_json: *const c_char,
+    turn: u32,
+) -> FcnTurnResult {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return FcnTurnResult::Error;
+    }
+    let pk = match cstr_to_str(player_pk) {
+        Some(s) => s,
+        None => return FcnTurnResult::Error,
+    };
+    let json = match cstr_to_str(actions_json) {
+        Some(s) => s,
+        None => return FcnTurnResult::Error,
+    };
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &mut *ls };
+    match ls.inner.submit_reveal(ActionReveal {
+        actions_json: json.to_string(),
+        turn,
+        player_pubkey: pk.to_string(),
+    }) {
+        Ok(r) => turn_advance_to_ffi(r),
+        Err(e) => {
+            set_last_error_from(e);
+            FcnTurnResult::Error
+        }
+    }
+}
+
+/// Get ordered actions as a JSON array string.
+///
+/// Returns a JSON array of action reveal objects, e.g.
+/// `[{"actions_json":"...","turn":1,"player_pubkey":"..."},...]`.
+///
+/// The caller must free the returned string with `fcn_string_free()`.
+/// Returns `NULL` on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_ordered_actions(ls: *const FcnLockstep) -> *mut c_char {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &*ls };
+    match ls.inner.ordered_actions() {
+        Ok(actions) => {
+            let json = match serde_json::to_string(&actions) {
+                Ok(j) => j,
+                Err(e) => {
+                    set_last_error(&format!("failed to serialize actions: {e}"));
+                    return std::ptr::null_mut();
+                }
+            };
+            string_to_c(json)
+        }
+        Err(e) => {
+            set_last_error_from(e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Signal that actions have been applied to the game state.
+///
+/// Transitions the protocol from `Apply` to `Verify`.
+/// Returns 0 on success, -1 on error (null pointer).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_actions_applied(ls: *mut FcnLockstep) -> i32 {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &mut *ls };
+    ls.inner.actions_applied();
+    0
+}
+
+/// Submit a state hash for consensus verification.
+///
+/// Returns a `FcnTurnResult` tag. On error returns `FcnTurnResult::Error`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_submit_state_hash(
+    ls: *mut FcnLockstep,
+    player_pk: *const c_char,
+    state_hash: *const c_char,
+    turn: u32,
+) -> FcnTurnResult {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return FcnTurnResult::Error;
+    }
+    let pk = match cstr_to_str(player_pk) {
+        Some(s) => s,
+        None => return FcnTurnResult::Error,
+    };
+    let hash = match cstr_to_str(state_hash) {
+        Some(s) => s,
+        None => return FcnTurnResult::Error,
+    };
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &mut *ls };
+    match ls.inner.submit_state_hash(StateHashSubmission {
+        state_hash: hash.to_string(),
+        turn,
+        player_pubkey: pk.to_string(),
+    }) {
+        Ok(r) => turn_advance_to_ffi(r),
+        Err(e) => {
+            set_last_error_from(e);
+            FcnTurnResult::Error
+        }
+    }
+}
+
+/// Check whether the current phase has timed out.
+///
+/// Returns `FcnTurnResult::Timeout` if timed out, `FcnTurnResult::Waiting`
+/// if no timeout has occurred, or `FcnTurnResult::Error` on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_check_timeout(ls: *const FcnLockstep) -> FcnTurnResult {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return FcnTurnResult::Error;
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &*ls };
+    match ls.inner.check_timeout() {
+        Some(result) => turn_advance_to_ffi(result),
+        None => FcnTurnResult::Waiting,
+    }
+}
+
+/// Get the current turn number.
+///
+/// Returns -1 on error (null pointer).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_current_turn(ls: *const FcnLockstep) -> i32 {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return -1;
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &*ls };
+    ls.inner.current_turn() as i32
+}
+
+/// Get the current turn phase.
+///
+/// Returns `FcnTurnPhase::Complete` on null pointer (and sets last error).
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_current_phase(ls: *const FcnLockstep) -> FcnTurnPhase {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return FcnTurnPhase::Complete;
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &*ls };
+    ls.inner.current_phase().into()
+}
+
+/// Compute a SHA-256 commitment hash for the given actions JSON.
+///
+/// The caller must free the returned string with `fcn_string_free()`.
+/// Returns `NULL` on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_compute_commitment(actions_json: *const c_char) -> *mut c_char {
+    let json = match cstr_to_str(actions_json) {
+        Some(s) => s,
+        None => return std::ptr::null_mut(),
+    };
+    string_to_c(LockstepProtocol::compute_commitment(json))
+}
+
+/// Get the consensus state hash after a completed turn.
+///
+/// Returns the hash string, or `NULL` if the turn is not complete
+/// or the pointer is null.
+/// The caller must free the returned string with `fcn_string_free()`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_consensus_hash(ls: *const FcnLockstep) -> *mut c_char {
+    if ls.is_null() {
+        set_last_error("null lockstep pointer");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Caller guarantees ls is valid.
+    let ls = unsafe { &*ls };
+    match ls.inner.consensus_state_hash() {
+        Some(h) => string_to_c(h.to_string()),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Free a lockstep protocol handle.
+///
+/// After this call the handle must not be used.
+#[unsafe(no_mangle)]
+pub extern "C" fn fcn_lockstep_free(ls: *mut FcnLockstep) {
+    if !ls.is_null() {
+        // SAFETY: Caller guarantees ls was returned by fcn_lockstep_new.
+        unsafe {
+            let _ = Box::from_raw(ls);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1155,5 +1560,252 @@ mod tests {
     #[test]
     fn lobby_free_null() {
         fcn_lobby_free(std::ptr::null_mut()); // no-op
+    }
+
+    // -- Lockstep FFI ------------------------------------------------------
+
+    /// Helper: create a 2-player concurrent lockstep via FFI.
+    fn make_lockstep() -> *mut FcnLockstep {
+        let pks = std::ffi::CString::new(r#"["alice","bob"]"#).unwrap();
+        let ls = fcn_lockstep_new(0, 0, pks.as_ptr());
+        assert!(!ls.is_null(), "lockstep creation failed");
+        ls
+    }
+
+    #[test]
+    fn lockstep_full_lifecycle_ffi() {
+        let ls = make_lockstep();
+        assert_eq!(fcn_lockstep_begin_turn(ls, 1), 0);
+        assert_eq!(fcn_lockstep_current_turn(ls), 1);
+        assert_eq!(fcn_lockstep_current_phase(ls), FcnTurnPhase::Commit);
+
+        // Compute commitments.
+        let actions_a = std::ffi::CString::new(r#"["move"]"#).unwrap();
+        let actions_b = std::ffi::CString::new(r#"["build"]"#).unwrap();
+        let hash_a_ptr = fcn_lockstep_compute_commitment(actions_a.as_ptr());
+        let hash_b_ptr = fcn_lockstep_compute_commitment(actions_b.as_ptr());
+        assert!(!hash_a_ptr.is_null());
+        assert!(!hash_b_ptr.is_null());
+
+        let alice = std::ffi::CString::new("alice").unwrap();
+        let bob = std::ffi::CString::new("bob").unwrap();
+
+        // Commit phase.
+        let r = fcn_lockstep_submit_commitment(ls, alice.as_ptr(), hash_a_ptr, 1);
+        assert_eq!(r, FcnTurnResult::Waiting);
+        let r = fcn_lockstep_submit_commitment(ls, bob.as_ptr(), hash_b_ptr, 1);
+        assert_eq!(r, FcnTurnResult::Ready);
+        assert_eq!(fcn_lockstep_current_phase(ls), FcnTurnPhase::Reveal);
+
+        // Reveal phase.
+        let r = fcn_lockstep_submit_reveal(ls, alice.as_ptr(), actions_a.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::Waiting);
+        let r = fcn_lockstep_submit_reveal(ls, bob.as_ptr(), actions_b.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::Ready);
+        assert_eq!(fcn_lockstep_current_phase(ls), FcnTurnPhase::Apply);
+
+        // Ordered actions.
+        let actions_ptr = fcn_lockstep_ordered_actions(ls);
+        assert!(!actions_ptr.is_null());
+        let actions_str = unsafe { CStr::from_ptr(actions_ptr) }.to_str().unwrap();
+        assert!(actions_str.contains("alice"));
+        assert!(actions_str.contains("bob"));
+        crate::error::fcn_string_free(actions_ptr);
+
+        // Apply + Verify.
+        assert_eq!(fcn_lockstep_actions_applied(ls), 0);
+        assert_eq!(fcn_lockstep_current_phase(ls), FcnTurnPhase::Verify);
+
+        let hash = std::ffi::CString::new("state_hash_1").unwrap();
+        let r = fcn_lockstep_submit_state_hash(ls, alice.as_ptr(), hash.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::Waiting);
+        let r = fcn_lockstep_submit_state_hash(ls, bob.as_ptr(), hash.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::Ready);
+        assert_eq!(fcn_lockstep_current_phase(ls), FcnTurnPhase::Complete);
+
+        // Consensus hash.
+        let ch = fcn_lockstep_consensus_hash(ls);
+        assert!(!ch.is_null());
+        let ch_str = unsafe { CStr::from_ptr(ch) }.to_str().unwrap();
+        assert_eq!(ch_str, "state_hash_1");
+        crate::error::fcn_string_free(ch);
+
+        crate::error::fcn_string_free(hash_a_ptr);
+        crate::error::fcn_string_free(hash_b_ptr);
+        fcn_lockstep_free(ls);
+    }
+
+    #[test]
+    fn lockstep_null_safety_new() {
+        // Null player pubkeys JSON.
+        assert!(fcn_lockstep_new(0, 0, std::ptr::null()).is_null());
+    }
+
+    #[test]
+    fn lockstep_null_safety_begin_turn() {
+        assert_eq!(fcn_lockstep_begin_turn(std::ptr::null_mut(), 1), -1);
+    }
+
+    #[test]
+    fn lockstep_null_safety_submit_commitment() {
+        assert_eq!(
+            fcn_lockstep_submit_commitment(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0
+            ),
+            FcnTurnResult::Error
+        );
+    }
+
+    #[test]
+    fn lockstep_null_safety_submit_reveal() {
+        assert_eq!(
+            fcn_lockstep_submit_reveal(std::ptr::null_mut(), std::ptr::null(), std::ptr::null(), 0),
+            FcnTurnResult::Error
+        );
+    }
+
+    #[test]
+    fn lockstep_null_safety_ordered_actions() {
+        assert!(fcn_lockstep_ordered_actions(std::ptr::null()).is_null());
+    }
+
+    #[test]
+    fn lockstep_null_safety_actions_applied() {
+        assert_eq!(fcn_lockstep_actions_applied(std::ptr::null_mut()), -1);
+    }
+
+    #[test]
+    fn lockstep_null_safety_submit_state_hash() {
+        assert_eq!(
+            fcn_lockstep_submit_state_hash(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0
+            ),
+            FcnTurnResult::Error
+        );
+    }
+
+    #[test]
+    fn lockstep_null_safety_check_timeout() {
+        assert_eq!(
+            fcn_lockstep_check_timeout(std::ptr::null()),
+            FcnTurnResult::Error
+        );
+    }
+
+    #[test]
+    fn lockstep_null_safety_current_turn() {
+        assert_eq!(fcn_lockstep_current_turn(std::ptr::null()), -1);
+    }
+
+    #[test]
+    fn lockstep_null_safety_current_phase() {
+        // Returns Complete on null (with error set).
+        assert_eq!(
+            fcn_lockstep_current_phase(std::ptr::null()),
+            FcnTurnPhase::Complete
+        );
+    }
+
+    #[test]
+    fn lockstep_null_safety_compute_commitment() {
+        assert!(fcn_lockstep_compute_commitment(std::ptr::null()).is_null());
+    }
+
+    #[test]
+    fn lockstep_null_safety_consensus_hash() {
+        assert!(fcn_lockstep_consensus_hash(std::ptr::null()).is_null());
+    }
+
+    #[test]
+    fn lockstep_free_null() {
+        fcn_lockstep_free(std::ptr::null_mut()); // no-op
+    }
+
+    #[test]
+    fn lockstep_invalid_phase_mode() {
+        let pks = std::ffi::CString::new(r#"["alice"]"#).unwrap();
+        assert!(fcn_lockstep_new(99, 0, pks.as_ptr()).is_null());
+    }
+
+    #[test]
+    fn lockstep_invalid_json() {
+        let bad_json = std::ffi::CString::new("not json").unwrap();
+        assert!(fcn_lockstep_new(0, 0, bad_json.as_ptr()).is_null());
+    }
+
+    #[test]
+    fn lockstep_reveal_mismatch_ffi() {
+        let ls = make_lockstep();
+        fcn_lockstep_begin_turn(ls, 1);
+
+        let actions_a = std::ffi::CString::new(r#"["move"]"#).unwrap();
+        let actions_b = std::ffi::CString::new(r#"["build"]"#).unwrap();
+        let hash_a = fcn_lockstep_compute_commitment(actions_a.as_ptr());
+        let hash_b = fcn_lockstep_compute_commitment(actions_b.as_ptr());
+
+        let alice = std::ffi::CString::new("alice").unwrap();
+        let bob = std::ffi::CString::new("bob").unwrap();
+
+        fcn_lockstep_submit_commitment(ls, alice.as_ptr(), hash_a, 1);
+        fcn_lockstep_submit_commitment(ls, bob.as_ptr(), hash_b, 1);
+
+        // Alice reveals different actions than committed.
+        let cheat = std::ffi::CString::new(r#"["CHEAT"]"#).unwrap();
+        let r = fcn_lockstep_submit_reveal(ls, alice.as_ptr(), cheat.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::RevealMismatch);
+
+        crate::error::fcn_string_free(hash_a);
+        crate::error::fcn_string_free(hash_b);
+        fcn_lockstep_free(ls);
+    }
+
+    #[test]
+    fn lockstep_desync_ffi() {
+        let ls = make_lockstep();
+        fcn_lockstep_begin_turn(ls, 1);
+
+        let actions_a = std::ffi::CString::new("a").unwrap();
+        let actions_b = std::ffi::CString::new("b").unwrap();
+        let hash_a = fcn_lockstep_compute_commitment(actions_a.as_ptr());
+        let hash_b = fcn_lockstep_compute_commitment(actions_b.as_ptr());
+
+        let alice = std::ffi::CString::new("alice").unwrap();
+        let bob = std::ffi::CString::new("bob").unwrap();
+
+        fcn_lockstep_submit_commitment(ls, alice.as_ptr(), hash_a, 1);
+        fcn_lockstep_submit_commitment(ls, bob.as_ptr(), hash_b, 1);
+        fcn_lockstep_submit_reveal(ls, alice.as_ptr(), actions_a.as_ptr(), 1);
+        fcn_lockstep_submit_reveal(ls, bob.as_ptr(), actions_b.as_ptr(), 1);
+        fcn_lockstep_actions_applied(ls);
+
+        let h1 = std::ffi::CString::new("hash_alice").unwrap();
+        let h2 = std::ffi::CString::new("hash_bob").unwrap();
+        fcn_lockstep_submit_state_hash(ls, alice.as_ptr(), h1.as_ptr(), 1);
+        let r = fcn_lockstep_submit_state_hash(ls, bob.as_ptr(), h2.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::DesyncDetected);
+
+        crate::error::fcn_string_free(hash_a);
+        crate::error::fcn_string_free(hash_b);
+        fcn_lockstep_free(ls);
+    }
+
+    #[test]
+    fn lockstep_wrong_phase_ffi() {
+        let ls = make_lockstep();
+        fcn_lockstep_begin_turn(ls, 1);
+
+        // Try to reveal during Commit phase.
+        let alice = std::ffi::CString::new("alice").unwrap();
+        let actions = std::ffi::CString::new("x").unwrap();
+        let r = fcn_lockstep_submit_reveal(ls, alice.as_ptr(), actions.as_ptr(), 1);
+        assert_eq!(r, FcnTurnResult::Error);
+
+        fcn_lockstep_free(ls);
     }
 }
