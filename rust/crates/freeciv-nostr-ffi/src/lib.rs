@@ -21,6 +21,7 @@
 mod chain;
 mod error;
 mod identity;
+mod net;
 mod signer;
 mod util;
 mod verifier;

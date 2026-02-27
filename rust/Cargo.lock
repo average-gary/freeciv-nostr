@@ -1267,13 +1267,16 @@ dependencies = [
 name = "freeciv-nostr-ffi"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "freeciv-nostr-core",
  "freeciv-nostr-net",
  "freeciv-nostr-verify",
  "hex",
+ "iroh 0.96.0",
  "libc",
  "nostr",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
