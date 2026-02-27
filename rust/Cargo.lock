@@ -1284,6 +1284,7 @@ name = "freeciv-nostr-net"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "freeciv-nostr-core",
  "futures-lite",
  "hex",
  "iroh 0.96.0",

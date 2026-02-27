@@ -19,6 +19,7 @@ futures-lite = "2"
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+freeciv-nostr-core = { path = "../freeciv-nostr-core" }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
