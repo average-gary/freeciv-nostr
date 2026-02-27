@@ -6,5 +6,6 @@ pub mod endpoint;
 pub mod error;
 pub mod gossip;
 pub mod lobby;
+pub mod lockstep;
 pub mod message;
 pub mod protocol;
