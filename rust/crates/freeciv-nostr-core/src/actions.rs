@@ -281,6 +281,523 @@ pub const STATE_MUTATING_TYPES: &[PacketType] = &[
     PacketType::VOTE_SUBMIT,
 ];
 
+// ── Strongly-typed payload structs ──────────────────────────────────────────
+
+// ── Unit payloads ──────────────────────────────────────────────────────────
+
+/// Payload for UNIT_DO_ACTION (packet 84).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitDoAction {
+    pub unit_id: i32,
+    pub target_id: i32,
+    pub sub_target: i32,
+    pub action_type: i32,
+}
+
+/// Payload for UNIT_ORDERS (packet 73).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitOrders {
+    pub unit_id: i32,
+    pub length: i32,
+    pub repeat: bool,
+    pub vigilant: bool,
+    pub orders: Vec<UnitOrder>,
+}
+
+/// A single order within a [`UnitOrders`] or [`CityRallyPoint`] sequence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitOrder {
+    pub order: i32,
+    pub activity: i32,
+    pub target: i32,
+    pub sub_target: i32,
+    pub action: i32,
+    pub dir: i32,
+}
+
+/// Payload for UNIT_SSCS_SET (packet 71).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitSscsSet {
+    pub unit_id: i32,
+    pub type_: i32,
+    pub value: i32,
+}
+
+/// Payload for UNIT_SERVER_SIDE_AGENT_SET (packet 74).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitServerSideAgentSet {
+    pub unit_id: i32,
+    pub agent: i32,
+}
+
+/// Payload for UNIT_TYPE_UPGRADE (packet 83).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitTypeUpgrade {
+    pub unit_type: i32,
+}
+
+/// Payload for UNIT_CHANGE_ACTIVITY (packet 222).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitChangeActivity {
+    pub unit_id: i32,
+    pub activity: i32,
+    pub target: i32,
+}
+
+/// Payload for UNIT_ACTION_QUERY (packet 82).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitActionQuery {
+    pub unit_id: i32,
+    pub target_id: i32,
+    pub action_type: i32,
+}
+
+/// Payload for UNIT_GET_ACTIONS (packet 87).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UnitGetActions {
+    pub unit_id: i32,
+    pub target_unit_id: i32,
+    pub target_city_id: i32,
+    pub target_tile_id: i32,
+    pub disturb_player: bool,
+}
+
+// ── City payloads ──────────────────────────────────────────────────────────
+
+/// Payload for CITY_SELL (packet 33).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CitySell {
+    pub city_id: i32,
+    pub build_id: i32,
+}
+
+/// Payload for CITY_BUY (packet 34).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityBuy {
+    pub city_id: i32,
+}
+
+/// Payload for CITY_CHANGE (packet 35).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityChange {
+    pub city_id: i32,
+    pub production_kind: i32,
+    pub production_value: i32,
+}
+
+/// Payload for CITY_WORKLIST (packet 36).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityWorklist {
+    pub city_id: i32,
+    pub worklist: Vec<WorklistEntry>,
+}
+
+/// A single entry in a [`CityWorklist`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorklistEntry {
+    pub kind: i32,
+    pub value: i32,
+}
+
+/// Payload for CITY_MAKE_SPECIALIST (packet 37).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityMakeSpecialist {
+    pub city_id: i32,
+    pub tile_id: i32,
+}
+
+/// Payload for CITY_MAKE_WORKER (packet 38).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityMakeWorker {
+    pub city_id: i32,
+    pub tile_id: i32,
+}
+
+/// Payload for CITY_CHANGE_SPECIALIST (packet 39).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityChangeSpecialist {
+    pub city_id: i32,
+    pub from: i32,
+    pub to: i32,
+}
+
+/// Payload for CITY_RENAME (packet 40).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityRename {
+    pub city_id: i32,
+    pub name: String,
+}
+
+/// Payload for CITY_OPTIONS_REQ (packet 41).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityOptionsReq {
+    pub city_id: i32,
+    pub options: i32,
+}
+
+/// Payload for CITY_REFRESH (packet 42).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityRefresh {
+    pub city_id: i32,
+}
+
+/// Payload for CITY_NAME_SUGGESTION_REQ (packet 43).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityNameSuggestionReq {
+    pub unit_id: i32,
+}
+
+/// Payload for CITY_RALLY_POINT (packet 138).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CityRallyPoint {
+    pub city_id: i32,
+    pub length: i32,
+    pub persistent: bool,
+    pub vigilant: bool,
+    pub orders: Vec<UnitOrder>,
+}
+
+/// Payload for WORKER_TASK (packet 241).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkerTask {
+    pub city_id: i32,
+    pub tile_id: i32,
+    pub activity: i32,
+    pub target: i32,
+    pub want: i32,
+}
+
+// ── Diplomacy payloads ─────────────────────────────────────────────────────
+
+/// Payload for DIPLOMACY_INIT_MEETING_REQ (packet 95).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiplomacyInitMeetingReq {
+    pub counterpart: i32,
+}
+
+/// Payload for DIPLOMACY_CANCEL_MEETING_REQ (packet 97).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiplomacyCancelMeetingReq {
+    pub counterpart: i32,
+}
+
+/// Payload for DIPLOMACY_CREATE_CLAUSE_REQ (packet 99).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiplomacyCreateClauseReq {
+    pub counterpart: i32,
+    pub giver: i32,
+    pub clause_type: i32,
+    pub value: i32,
+}
+
+/// Payload for DIPLOMACY_REMOVE_CLAUSE_REQ (packet 101).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiplomacyRemoveClauseReq {
+    pub counterpart: i32,
+    pub giver: i32,
+    pub clause_type: i32,
+    pub value: i32,
+}
+
+/// Payload for DIPLOMACY_ACCEPT_TREATY_REQ (packet 103).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiplomacyAcceptTreatyReq {
+    pub counterpart: i32,
+}
+
+/// Payload for DIPLOMACY_CANCEL_PACT (packet 105).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiplomacyCancelPact {
+    pub other_player_id: i32,
+    pub clause_type: i32,
+}
+
+// ── Research / Government payloads ─────────────────────────────────────────
+
+/// Payload for PLAYER_RATES (packet 53).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerRates {
+    pub tax: i32,
+    pub luxury: i32,
+    pub science: i32,
+}
+
+/// Payload for PLAYER_CHANGE_GOVERNMENT (packet 54).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerChangeGovernment {
+    pub government: i32,
+}
+
+/// Payload for PLAYER_RESEARCH (packet 55).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerResearch {
+    pub tech: i32,
+}
+
+/// Payload for PLAYER_TECH_GOAL (packet 56).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerTechGoal {
+    pub tech: i32,
+}
+
+/// Payload for PLAYER_PLACE_INFRA (packet 61).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerPlaceInfra {
+    pub tile: i32,
+    pub extra: i32,
+}
+
+/// Payload for PLAYER_MULTIPLIER (packet 242).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerMultiplier {
+    pub multiplier: i32,
+    pub value: i32,
+}
+
+// ── Misc payloads ──────────────────────────────────────────────────────────
+
+/// Payload for PLAYER_READY (packet 11).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerReady {
+    pub is_ready: bool,
+}
+
+/// Payload for CHAT_MSG_REQ (packet 26).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatMsgReq {
+    pub message: String,
+}
+
+/// Payload for PLAYER_PHASE_DONE (packet 52).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlayerPhaseDone {
+    pub turn: i32,
+}
+
+/// Payload for REPORT_REQ (packet 111).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReportReq {
+    pub report_type: i32,
+}
+
+/// Payload for SPACESHIP_LAUNCH (packet 135).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpaceshipLaunch {}
+
+/// Payload for SPACESHIP_PLACE (packet 136).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpaceshipPlace {
+    pub place_type: i32,
+    pub num: i32,
+}
+
+/// Payload for VOTE_SUBMIT (packet 189).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoteSubmit {
+    pub vote_no: i32,
+    pub value: i32,
+}
+
+// ── PlayerAction typed-payload helpers ─────────────────────────────────────
+
+impl PlayerAction {
+    /// Attempt to deserialize the payload into a strongly-typed struct.
+    ///
+    /// Returns `Err` if the payload JSON doesn't match the expected schema `T`.
+    ///
+    /// # Example
+    /// ```
+    /// # use freeciv_nostr_core::actions::*;
+    /// let action = PlayerAction {
+    ///     packet_type: PacketType::UNIT_DO_ACTION,
+    ///     turn: 1, phase: 0, sequence: 0,
+    ///     prev_event_id: String::new(),
+    ///     payload: serde_json::json!({"unit_id": 1, "target_id": 2, "sub_target": 0, "action_type": 3}),
+    /// };
+    /// let typed: UnitDoAction = action.typed_payload().unwrap();
+    /// assert_eq!(typed.unit_id, 1);
+    /// ```
+    pub fn typed_payload<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::from_value(self.payload.clone())
+    }
+
+    /// Validate that the payload matches the expected schema for this packet type.
+    ///
+    /// Returns `Ok(())` if the payload can be deserialized into the expected type,
+    /// or `Err` with a description of the mismatch.
+    pub fn validate_payload(&self) -> Result<(), String> {
+        let pt = self.packet_type;
+        match pt {
+            // Unit payloads
+            pt if pt == PacketType::UNIT_DO_ACTION => self
+                .typed_payload::<UnitDoAction>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_ORDERS => self
+                .typed_payload::<UnitOrders>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_SSCS_SET => self
+                .typed_payload::<UnitSscsSet>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_SERVER_SIDE_AGENT_SET => self
+                .typed_payload::<UnitServerSideAgentSet>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_TYPE_UPGRADE => self
+                .typed_payload::<UnitTypeUpgrade>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_CHANGE_ACTIVITY => self
+                .typed_payload::<UnitChangeActivity>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_ACTION_QUERY => self
+                .typed_payload::<UnitActionQuery>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::UNIT_GET_ACTIONS => self
+                .typed_payload::<UnitGetActions>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            // City payloads
+            pt if pt == PacketType::CITY_SELL => self
+                .typed_payload::<CitySell>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_BUY => self
+                .typed_payload::<CityBuy>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_CHANGE => self
+                .typed_payload::<CityChange>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_WORKLIST => self
+                .typed_payload::<CityWorklist>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_MAKE_SPECIALIST => self
+                .typed_payload::<CityMakeSpecialist>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_MAKE_WORKER => self
+                .typed_payload::<CityMakeWorker>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_CHANGE_SPECIALIST => self
+                .typed_payload::<CityChangeSpecialist>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_RENAME => self
+                .typed_payload::<CityRename>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_OPTIONS_REQ => self
+                .typed_payload::<CityOptionsReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_REFRESH => self
+                .typed_payload::<CityRefresh>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_NAME_SUGGESTION_REQ => self
+                .typed_payload::<CityNameSuggestionReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CITY_RALLY_POINT => self
+                .typed_payload::<CityRallyPoint>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::WORKER_TASK => self
+                .typed_payload::<WorkerTask>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            // Diplomacy payloads
+            pt if pt == PacketType::DIPLOMACY_INIT_MEETING_REQ => self
+                .typed_payload::<DiplomacyInitMeetingReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::DIPLOMACY_CANCEL_MEETING_REQ => self
+                .typed_payload::<DiplomacyCancelMeetingReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::DIPLOMACY_CREATE_CLAUSE_REQ => self
+                .typed_payload::<DiplomacyCreateClauseReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::DIPLOMACY_REMOVE_CLAUSE_REQ => self
+                .typed_payload::<DiplomacyRemoveClauseReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::DIPLOMACY_ACCEPT_TREATY_REQ => self
+                .typed_payload::<DiplomacyAcceptTreatyReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::DIPLOMACY_CANCEL_PACT => self
+                .typed_payload::<DiplomacyCancelPact>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            // Research / Government payloads
+            pt if pt == PacketType::PLAYER_RATES => self
+                .typed_payload::<PlayerRates>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::PLAYER_CHANGE_GOVERNMENT => self
+                .typed_payload::<PlayerChangeGovernment>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::PLAYER_RESEARCH => self
+                .typed_payload::<PlayerResearch>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::PLAYER_TECH_GOAL => self
+                .typed_payload::<PlayerTechGoal>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::PLAYER_PLACE_INFRA => self
+                .typed_payload::<PlayerPlaceInfra>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::PLAYER_MULTIPLIER => self
+                .typed_payload::<PlayerMultiplier>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            // Misc payloads
+            pt if pt == PacketType::PLAYER_READY => self
+                .typed_payload::<PlayerReady>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::CHAT_MSG_REQ => self
+                .typed_payload::<ChatMsgReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::PLAYER_PHASE_DONE => self
+                .typed_payload::<PlayerPhaseDone>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::REPORT_REQ => self
+                .typed_payload::<ReportReq>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::SPACESHIP_LAUNCH => self
+                .typed_payload::<SpaceshipLaunch>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::SPACESHIP_PLACE => self
+                .typed_payload::<SpaceshipPlace>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            pt if pt == PacketType::VOTE_SUBMIT => self
+                .typed_payload::<VoteSubmit>()
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
+            _ => Err(format!("unknown packet type: {}", self.packet_type)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,5 +1081,871 @@ mod tests {
     fn packet_type_display() {
         assert_eq!(format!("{}", PacketType::UNIT_ORDERS), "unit_orders(73)");
         assert_eq!(format!("{}", PacketType(9999)), "unknown(9999)");
+    }
+
+    // ── Typed payload round-trip tests ─────────────────────────────────────
+
+    /// Helper to build a `PlayerAction` from a typed payload.
+    fn make_action<T: Serialize>(packet_type: PacketType, payload: &T) -> PlayerAction {
+        PlayerAction {
+            packet_type,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::to_value(payload).unwrap(),
+        }
+    }
+
+    // ── Unit payloads ──────────────────────────────────────────────────────
+
+    #[test]
+    fn typed_payload_unit_do_action_roundtrip() {
+        let payload = UnitDoAction {
+            unit_id: 1,
+            target_id: 2,
+            sub_target: 0,
+            action_type: 3,
+        };
+        let action = make_action(PacketType::UNIT_DO_ACTION, &payload);
+        let typed: UnitDoAction = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_orders_roundtrip() {
+        let payload = UnitOrders {
+            unit_id: 5,
+            length: 2,
+            repeat: false,
+            vigilant: true,
+            orders: vec![
+                UnitOrder {
+                    order: 1,
+                    activity: 0,
+                    target: 10,
+                    sub_target: 0,
+                    action: 0,
+                    dir: 3,
+                },
+                UnitOrder {
+                    order: 2,
+                    activity: 1,
+                    target: 11,
+                    sub_target: 0,
+                    action: 0,
+                    dir: 5,
+                },
+            ],
+        };
+        let action = make_action(PacketType::UNIT_ORDERS, &payload);
+        let typed: UnitOrders = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_sscs_set_roundtrip() {
+        let payload = UnitSscsSet {
+            unit_id: 7,
+            type_: 2,
+            value: 99,
+        };
+        let action = make_action(PacketType::UNIT_SSCS_SET, &payload);
+        let typed: UnitSscsSet = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_server_side_agent_set_roundtrip() {
+        let payload = UnitServerSideAgentSet {
+            unit_id: 3,
+            agent: 1,
+        };
+        let action = make_action(PacketType::UNIT_SERVER_SIDE_AGENT_SET, &payload);
+        let typed: UnitServerSideAgentSet = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_type_upgrade_roundtrip() {
+        let payload = UnitTypeUpgrade { unit_type: 42 };
+        let action = make_action(PacketType::UNIT_TYPE_UPGRADE, &payload);
+        let typed: UnitTypeUpgrade = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_change_activity_roundtrip() {
+        let payload = UnitChangeActivity {
+            unit_id: 8,
+            activity: 4,
+            target: 20,
+        };
+        let action = make_action(PacketType::UNIT_CHANGE_ACTIVITY, &payload);
+        let typed: UnitChangeActivity = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_action_query_roundtrip() {
+        let payload = UnitActionQuery {
+            unit_id: 1,
+            target_id: 2,
+            action_type: 5,
+        };
+        let action = make_action(PacketType::UNIT_ACTION_QUERY, &payload);
+        let typed: UnitActionQuery = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_unit_get_actions_roundtrip() {
+        let payload = UnitGetActions {
+            unit_id: 1,
+            target_unit_id: 2,
+            target_city_id: 3,
+            target_tile_id: 4,
+            disturb_player: false,
+        };
+        let action = make_action(PacketType::UNIT_GET_ACTIONS, &payload);
+        let typed: UnitGetActions = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    // ── City payloads ──────────────────────────────────────────────────────
+
+    #[test]
+    fn typed_payload_city_sell_roundtrip() {
+        let payload = CitySell {
+            city_id: 10,
+            build_id: 5,
+        };
+        let action = make_action(PacketType::CITY_SELL, &payload);
+        let typed: CitySell = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_buy_roundtrip() {
+        let payload = CityBuy { city_id: 10 };
+        let action = make_action(PacketType::CITY_BUY, &payload);
+        let typed: CityBuy = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_change_roundtrip() {
+        let payload = CityChange {
+            city_id: 10,
+            production_kind: 1,
+            production_value: 7,
+        };
+        let action = make_action(PacketType::CITY_CHANGE, &payload);
+        let typed: CityChange = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_worklist_roundtrip() {
+        let payload = CityWorklist {
+            city_id: 10,
+            worklist: vec![
+                WorklistEntry { kind: 0, value: 1 },
+                WorklistEntry { kind: 1, value: 3 },
+            ],
+        };
+        let action = make_action(PacketType::CITY_WORKLIST, &payload);
+        let typed: CityWorklist = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_make_specialist_roundtrip() {
+        let payload = CityMakeSpecialist {
+            city_id: 10,
+            tile_id: 44,
+        };
+        let action = make_action(PacketType::CITY_MAKE_SPECIALIST, &payload);
+        let typed: CityMakeSpecialist = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_make_worker_roundtrip() {
+        let payload = CityMakeWorker {
+            city_id: 10,
+            tile_id: 44,
+        };
+        let action = make_action(PacketType::CITY_MAKE_WORKER, &payload);
+        let typed: CityMakeWorker = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_change_specialist_roundtrip() {
+        let payload = CityChangeSpecialist {
+            city_id: 10,
+            from: 1,
+            to: 2,
+        };
+        let action = make_action(PacketType::CITY_CHANGE_SPECIALIST, &payload);
+        let typed: CityChangeSpecialist = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_rename_roundtrip() {
+        let payload = CityRename {
+            city_id: 10,
+            name: "New Rome".to_string(),
+        };
+        let action = make_action(PacketType::CITY_RENAME, &payload);
+        let typed: CityRename = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_options_req_roundtrip() {
+        let payload = CityOptionsReq {
+            city_id: 10,
+            options: 0x0F,
+        };
+        let action = make_action(PacketType::CITY_OPTIONS_REQ, &payload);
+        let typed: CityOptionsReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_refresh_roundtrip() {
+        let payload = CityRefresh { city_id: 10 };
+        let action = make_action(PacketType::CITY_REFRESH, &payload);
+        let typed: CityRefresh = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_name_suggestion_req_roundtrip() {
+        let payload = CityNameSuggestionReq { unit_id: 3 };
+        let action = make_action(PacketType::CITY_NAME_SUGGESTION_REQ, &payload);
+        let typed: CityNameSuggestionReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_city_rally_point_roundtrip() {
+        let payload = CityRallyPoint {
+            city_id: 10,
+            length: 1,
+            persistent: true,
+            vigilant: false,
+            orders: vec![UnitOrder {
+                order: 1,
+                activity: 0,
+                target: 50,
+                sub_target: 0,
+                action: 0,
+                dir: 2,
+            }],
+        };
+        let action = make_action(PacketType::CITY_RALLY_POINT, &payload);
+        let typed: CityRallyPoint = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_worker_task_roundtrip() {
+        let payload = WorkerTask {
+            city_id: 10,
+            tile_id: 44,
+            activity: 3,
+            target: 0,
+            want: 100,
+        };
+        let action = make_action(PacketType::WORKER_TASK, &payload);
+        let typed: WorkerTask = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    // ── Diplomacy payloads ─────────────────────────────────────────────────
+
+    #[test]
+    fn typed_payload_diplomacy_init_meeting_req_roundtrip() {
+        let payload = DiplomacyInitMeetingReq { counterpart: 2 };
+        let action = make_action(PacketType::DIPLOMACY_INIT_MEETING_REQ, &payload);
+        let typed: DiplomacyInitMeetingReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_diplomacy_cancel_meeting_req_roundtrip() {
+        let payload = DiplomacyCancelMeetingReq { counterpart: 2 };
+        let action = make_action(PacketType::DIPLOMACY_CANCEL_MEETING_REQ, &payload);
+        let typed: DiplomacyCancelMeetingReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_diplomacy_create_clause_req_roundtrip() {
+        let payload = DiplomacyCreateClauseReq {
+            counterpart: 2,
+            giver: 1,
+            clause_type: 3,
+            value: 100,
+        };
+        let action = make_action(PacketType::DIPLOMACY_CREATE_CLAUSE_REQ, &payload);
+        let typed: DiplomacyCreateClauseReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_diplomacy_remove_clause_req_roundtrip() {
+        let payload = DiplomacyRemoveClauseReq {
+            counterpart: 2,
+            giver: 1,
+            clause_type: 3,
+            value: 100,
+        };
+        let action = make_action(PacketType::DIPLOMACY_REMOVE_CLAUSE_REQ, &payload);
+        let typed: DiplomacyRemoveClauseReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_diplomacy_accept_treaty_req_roundtrip() {
+        let payload = DiplomacyAcceptTreatyReq { counterpart: 2 };
+        let action = make_action(PacketType::DIPLOMACY_ACCEPT_TREATY_REQ, &payload);
+        let typed: DiplomacyAcceptTreatyReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_diplomacy_cancel_pact_roundtrip() {
+        let payload = DiplomacyCancelPact {
+            other_player_id: 2,
+            clause_type: 1,
+        };
+        let action = make_action(PacketType::DIPLOMACY_CANCEL_PACT, &payload);
+        let typed: DiplomacyCancelPact = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    // ── Research / Government payloads ─────────────────────────────────────
+
+    #[test]
+    fn typed_payload_player_rates_roundtrip() {
+        let payload = PlayerRates {
+            tax: 30,
+            luxury: 20,
+            science: 50,
+        };
+        let action = make_action(PacketType::PLAYER_RATES, &payload);
+        let typed: PlayerRates = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_player_change_government_roundtrip() {
+        let payload = PlayerChangeGovernment { government: 4 };
+        let action = make_action(PacketType::PLAYER_CHANGE_GOVERNMENT, &payload);
+        let typed: PlayerChangeGovernment = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_player_research_roundtrip() {
+        let payload = PlayerResearch { tech: 15 };
+        let action = make_action(PacketType::PLAYER_RESEARCH, &payload);
+        let typed: PlayerResearch = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_player_tech_goal_roundtrip() {
+        let payload = PlayerTechGoal { tech: 30 };
+        let action = make_action(PacketType::PLAYER_TECH_GOAL, &payload);
+        let typed: PlayerTechGoal = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_player_place_infra_roundtrip() {
+        let payload = PlayerPlaceInfra {
+            tile: 100,
+            extra: 5,
+        };
+        let action = make_action(PacketType::PLAYER_PLACE_INFRA, &payload);
+        let typed: PlayerPlaceInfra = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_player_multiplier_roundtrip() {
+        let payload = PlayerMultiplier {
+            multiplier: 1,
+            value: 50,
+        };
+        let action = make_action(PacketType::PLAYER_MULTIPLIER, &payload);
+        let typed: PlayerMultiplier = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    // ── Misc payloads ──────────────────────────────────────────────────────
+
+    #[test]
+    fn typed_payload_player_ready_roundtrip() {
+        let payload = PlayerReady { is_ready: true };
+        let action = make_action(PacketType::PLAYER_READY, &payload);
+        let typed: PlayerReady = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_chat_msg_req_roundtrip() {
+        let payload = ChatMsgReq {
+            message: "hello world".to_string(),
+        };
+        let action = make_action(PacketType::CHAT_MSG_REQ, &payload);
+        let typed: ChatMsgReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_player_phase_done_roundtrip() {
+        let payload = PlayerPhaseDone { turn: 42 };
+        let action = make_action(PacketType::PLAYER_PHASE_DONE, &payload);
+        let typed: PlayerPhaseDone = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_report_req_roundtrip() {
+        let payload = ReportReq { report_type: 2 };
+        let action = make_action(PacketType::REPORT_REQ, &payload);
+        let typed: ReportReq = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_spaceship_launch_empty_struct() {
+        let payload = SpaceshipLaunch {};
+        let action = make_action(PacketType::SPACESHIP_LAUNCH, &payload);
+        let typed: SpaceshipLaunch = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_spaceship_place_roundtrip() {
+        let payload = SpaceshipPlace {
+            place_type: 1,
+            num: 3,
+        };
+        let action = make_action(PacketType::SPACESHIP_PLACE, &payload);
+        let typed: SpaceshipPlace = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    #[test]
+    fn typed_payload_vote_submit_roundtrip() {
+        let payload = VoteSubmit {
+            vote_no: 7,
+            value: 1,
+        };
+        let action = make_action(PacketType::VOTE_SUBMIT, &payload);
+        let typed: VoteSubmit = action.typed_payload().unwrap();
+        assert_eq!(typed, payload);
+    }
+
+    // ── typed_payload error cases ──────────────────────────────────────────
+
+    #[test]
+    fn typed_payload_wrong_type_fails() {
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_DO_ACTION,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({"message": "hello"}), // ChatMsgReq shape
+        };
+        assert!(action.typed_payload::<UnitDoAction>().is_err());
+    }
+
+    #[test]
+    fn typed_payload_missing_field_fails() {
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_DO_ACTION,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({"unit_id": 1}), // missing required fields
+        };
+        assert!(action.typed_payload::<UnitDoAction>().is_err());
+    }
+
+    #[test]
+    fn typed_payload_extra_fields_ok() {
+        // serde by default ignores unknown fields
+        let action = PlayerAction {
+            packet_type: PacketType::CITY_BUY,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({"city_id": 10, "extra_field": 999}),
+        };
+        let typed: CityBuy = action.typed_payload().unwrap();
+        assert_eq!(typed.city_id, 10);
+    }
+
+    // ── validate_payload tests ─────────────────────────────────────────────
+
+    #[test]
+    fn validate_payload_success() {
+        let payload = UnitDoAction {
+            unit_id: 1,
+            target_id: 2,
+            sub_target: 0,
+            action_type: 3,
+        };
+        let action = make_action(PacketType::UNIT_DO_ACTION, &payload);
+        assert!(action.validate_payload().is_ok());
+    }
+
+    #[test]
+    fn validate_payload_mismatch() {
+        let action = PlayerAction {
+            packet_type: PacketType::UNIT_DO_ACTION,
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({"message": "hello"}), // wrong shape
+        };
+        assert!(action.validate_payload().is_err());
+    }
+
+    #[test]
+    fn validate_payload_unknown_type() {
+        let action = PlayerAction {
+            packet_type: PacketType(9999),
+            turn: 1,
+            phase: 0,
+            sequence: 0,
+            prev_event_id: String::new(),
+            payload: serde_json::json!({}),
+        };
+        let err = action.validate_payload().unwrap_err();
+        assert!(err.contains("unknown packet type"));
+    }
+
+    #[test]
+    fn validate_payload_all_known_types() {
+        // Verify validate_payload returns Ok for every known packet type
+        // when given a correctly-shaped payload.
+        let test_cases: Vec<(PacketType, serde_json::Value)> = vec![
+            (
+                PacketType::UNIT_DO_ACTION,
+                serde_json::to_value(UnitDoAction {
+                    unit_id: 0,
+                    target_id: 0,
+                    sub_target: 0,
+                    action_type: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::UNIT_ORDERS,
+                serde_json::to_value(UnitOrders {
+                    unit_id: 0,
+                    length: 0,
+                    repeat: false,
+                    vigilant: false,
+                    orders: vec![],
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::UNIT_SSCS_SET,
+                serde_json::to_value(UnitSscsSet {
+                    unit_id: 0,
+                    type_: 0,
+                    value: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::UNIT_SERVER_SIDE_AGENT_SET,
+                serde_json::to_value(UnitServerSideAgentSet {
+                    unit_id: 0,
+                    agent: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::UNIT_TYPE_UPGRADE,
+                serde_json::to_value(UnitTypeUpgrade { unit_type: 0 }).unwrap(),
+            ),
+            (
+                PacketType::UNIT_CHANGE_ACTIVITY,
+                serde_json::to_value(UnitChangeActivity {
+                    unit_id: 0,
+                    activity: 0,
+                    target: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::UNIT_ACTION_QUERY,
+                serde_json::to_value(UnitActionQuery {
+                    unit_id: 0,
+                    target_id: 0,
+                    action_type: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::UNIT_GET_ACTIONS,
+                serde_json::to_value(UnitGetActions {
+                    unit_id: 0,
+                    target_unit_id: 0,
+                    target_city_id: 0,
+                    target_tile_id: 0,
+                    disturb_player: false,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_SELL,
+                serde_json::to_value(CitySell {
+                    city_id: 0,
+                    build_id: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_BUY,
+                serde_json::to_value(CityBuy { city_id: 0 }).unwrap(),
+            ),
+            (
+                PacketType::CITY_CHANGE,
+                serde_json::to_value(CityChange {
+                    city_id: 0,
+                    production_kind: 0,
+                    production_value: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_WORKLIST,
+                serde_json::to_value(CityWorklist {
+                    city_id: 0,
+                    worklist: vec![],
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_MAKE_SPECIALIST,
+                serde_json::to_value(CityMakeSpecialist {
+                    city_id: 0,
+                    tile_id: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_MAKE_WORKER,
+                serde_json::to_value(CityMakeWorker {
+                    city_id: 0,
+                    tile_id: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_CHANGE_SPECIALIST,
+                serde_json::to_value(CityChangeSpecialist {
+                    city_id: 0,
+                    from: 0,
+                    to: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_RENAME,
+                serde_json::to_value(CityRename {
+                    city_id: 0,
+                    name: String::new(),
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_OPTIONS_REQ,
+                serde_json::to_value(CityOptionsReq {
+                    city_id: 0,
+                    options: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::CITY_REFRESH,
+                serde_json::to_value(CityRefresh { city_id: 0 }).unwrap(),
+            ),
+            (
+                PacketType::CITY_NAME_SUGGESTION_REQ,
+                serde_json::to_value(CityNameSuggestionReq { unit_id: 0 }).unwrap(),
+            ),
+            (
+                PacketType::CITY_RALLY_POINT,
+                serde_json::to_value(CityRallyPoint {
+                    city_id: 0,
+                    length: 0,
+                    persistent: false,
+                    vigilant: false,
+                    orders: vec![],
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::WORKER_TASK,
+                serde_json::to_value(WorkerTask {
+                    city_id: 0,
+                    tile_id: 0,
+                    activity: 0,
+                    target: 0,
+                    want: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::DIPLOMACY_INIT_MEETING_REQ,
+                serde_json::to_value(DiplomacyInitMeetingReq { counterpart: 0 }).unwrap(),
+            ),
+            (
+                PacketType::DIPLOMACY_CANCEL_MEETING_REQ,
+                serde_json::to_value(DiplomacyCancelMeetingReq { counterpart: 0 }).unwrap(),
+            ),
+            (
+                PacketType::DIPLOMACY_CREATE_CLAUSE_REQ,
+                serde_json::to_value(DiplomacyCreateClauseReq {
+                    counterpart: 0,
+                    giver: 0,
+                    clause_type: 0,
+                    value: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::DIPLOMACY_REMOVE_CLAUSE_REQ,
+                serde_json::to_value(DiplomacyRemoveClauseReq {
+                    counterpart: 0,
+                    giver: 0,
+                    clause_type: 0,
+                    value: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::DIPLOMACY_ACCEPT_TREATY_REQ,
+                serde_json::to_value(DiplomacyAcceptTreatyReq { counterpart: 0 }).unwrap(),
+            ),
+            (
+                PacketType::DIPLOMACY_CANCEL_PACT,
+                serde_json::to_value(DiplomacyCancelPact {
+                    other_player_id: 0,
+                    clause_type: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::PLAYER_RATES,
+                serde_json::to_value(PlayerRates {
+                    tax: 0,
+                    luxury: 0,
+                    science: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::PLAYER_CHANGE_GOVERNMENT,
+                serde_json::to_value(PlayerChangeGovernment { government: 0 }).unwrap(),
+            ),
+            (
+                PacketType::PLAYER_RESEARCH,
+                serde_json::to_value(PlayerResearch { tech: 0 }).unwrap(),
+            ),
+            (
+                PacketType::PLAYER_TECH_GOAL,
+                serde_json::to_value(PlayerTechGoal { tech: 0 }).unwrap(),
+            ),
+            (
+                PacketType::PLAYER_PLACE_INFRA,
+                serde_json::to_value(PlayerPlaceInfra { tile: 0, extra: 0 }).unwrap(),
+            ),
+            (
+                PacketType::PLAYER_MULTIPLIER,
+                serde_json::to_value(PlayerMultiplier {
+                    multiplier: 0,
+                    value: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::PLAYER_READY,
+                serde_json::to_value(PlayerReady { is_ready: false }).unwrap(),
+            ),
+            (
+                PacketType::CHAT_MSG_REQ,
+                serde_json::to_value(ChatMsgReq {
+                    message: String::new(),
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::PLAYER_PHASE_DONE,
+                serde_json::to_value(PlayerPhaseDone { turn: 0 }).unwrap(),
+            ),
+            (
+                PacketType::REPORT_REQ,
+                serde_json::to_value(ReportReq { report_type: 0 }).unwrap(),
+            ),
+            (
+                PacketType::SPACESHIP_LAUNCH,
+                serde_json::to_value(SpaceshipLaunch {}).unwrap(),
+            ),
+            (
+                PacketType::SPACESHIP_PLACE,
+                serde_json::to_value(SpaceshipPlace {
+                    place_type: 0,
+                    num: 0,
+                })
+                .unwrap(),
+            ),
+            (
+                PacketType::VOTE_SUBMIT,
+                serde_json::to_value(VoteSubmit {
+                    vote_no: 0,
+                    value: 0,
+                })
+                .unwrap(),
+            ),
+        ];
+
+        for (pt, json) in &test_cases {
+            let action = PlayerAction {
+                packet_type: *pt,
+                turn: 1,
+                phase: 0,
+                sequence: 0,
+                prev_event_id: String::new(),
+                payload: json.clone(),
+            };
+            assert!(
+                action.validate_payload().is_ok(),
+                "validate_payload failed for {}",
+                pt
+            );
+        }
+
+        // Confirm we covered all 40 known types
+        assert_eq!(test_cases.len(), ALL_ACTION_TYPES.len());
     }
 }
