@@ -26,6 +26,7 @@ mod net;
 mod profile_ffi;
 mod relay_ffi;
 mod replay_ffi;
+mod savegame_ffi;
 mod signer;
 mod util;
 mod verifier;

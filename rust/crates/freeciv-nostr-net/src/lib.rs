@@ -16,5 +16,6 @@ pub mod profile;
 pub mod protocol;
 pub mod relay;
 pub mod replay;
+pub mod savegame;
 pub mod transport;
 pub mod validation;
