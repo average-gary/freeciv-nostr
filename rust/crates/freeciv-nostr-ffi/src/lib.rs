@@ -21,7 +21,11 @@
 mod chain;
 mod error;
 mod identity;
+mod matchmaking_ffi;
 mod net;
+mod profile_ffi;
+mod relay_ffi;
+mod replay_ffi;
 mod signer;
 mod util;
 mod verifier;
