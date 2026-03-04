@@ -1,0 +1,236 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  linux-appimage:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: check out freeciv-nostr
+        uses: actions/checkout@v6.0.1
+
+      - name: install system dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get -y install \
+            meson \
+            gettext \
+            libgtk-4-dev \
+            libcurl4-openssl-dev \
+            liblzma-dev \
+            libicu-dev \
+            libsqlite3-dev \
+            libsdl2-mixer-dev \
+            libsdl2-image-dev \
+            libsdl2-ttf-dev \
+            libsdl2-gfx-dev \
+            wget2 \
+            fuse \
+            libfuse2
+
+      - name: install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install cbindgen
+        run: cargo install cbindgen
+
+      - name: determine version
+        id: version
+        run: |
+          FCVER="$(./fc_version)"
+          TAG="${GITHUB_REF_NAME:-${{ inputs.tag_name }}}"
+          echo "fcver=${FCVER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: build AppImages
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          FCVER="${{ steps.version.outputs.fcver }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          SRC_ROOT="$(pwd)"
+          LINUXDEPLOY_VERSION="1-alpha-20251107-1"
+
+          mkdir -p release-build && cd release-build
+          BUILD_ROOT="$(pwd)"
+
+          # Download linuxdeploy
+          mkdir -p tools
+          ( cd tools && wget2 "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_VERSION}/linuxdeploy-x86_64.AppImage" )
+          chmod u+x tools/linuxdeploy-x86_64.AppImage
+
+          # --- Server AppImage ---
+          mkdir -p AppDir/server build/server
+          cd build/server
+          meson setup \
+            -Dappimage=true \
+            -Dprefix=/usr \
+            -Ddefault_library=static \
+            -Dclients=[] \
+            -Dfcmp=[] \
+            -Dtools=[] \
+            -Dnostr=true \
+            "${SRC_ROOT}"
+          DESTDIR="${BUILD_ROOT}/AppDir/server" ninja install
+          cd "${BUILD_ROOT}"
+
+          tools/linuxdeploy-x86_64.AppImage --appdir AppDir/server --output appimage
+          mv "Freeciv_server-x86_64.AppImage" "freeciv-nostr-server-${TAG}-x86_64.AppImage"
+
+          # --- GTK4 Client AppImage ---
+          mkdir -p AppDir/client-gtk4 build/client-gtk4
+          cd build/client-gtk4
+          meson setup \
+            -Dappimage=true \
+            -Dprefix=/usr \
+            -Ddefault_library=static \
+            -Dserver=disabled \
+            -Dclients=gtk4 \
+            -Dfcmp=[] \
+            -Dtools=[] \
+            "${SRC_ROOT}"
+          DESTDIR="${BUILD_ROOT}/AppDir/client-gtk4" ninja install
+          cd "${BUILD_ROOT}"
+
+          tools/linuxdeploy-x86_64.AppImage --appdir AppDir/client-gtk4 --output appimage
+          mv "Freeciv-x86_64.AppImage" "freeciv-nostr-gtk4-${TAG}-x86_64.AppImage"
+
+          # --- SDL2 Client AppImage ---
+          mkdir -p AppDir/client-sdl2 build/client-sdl2
+          cd build/client-sdl2
+          meson setup \
+            -Dappimage=true \
+            -Dprefix=/usr \
+            -Ddefault_library=static \
+            -Dserver=disabled \
+            -Dclients=sdl2 \
+            -Dfcmp=[] \
+            -Dtools=[] \
+            "${SRC_ROOT}"
+          DESTDIR="${BUILD_ROOT}/AppDir/client-sdl2" ninja install
+          cd "${BUILD_ROOT}"
+
+          tools/linuxdeploy-x86_64.AppImage --appdir AppDir/client-sdl2 --output appimage
+          mv "Freeciv_(SDL2)-x86_64.AppImage" "freeciv-nostr-sdl2-${TAG}-x86_64.AppImage"
+
+      - name: upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimages
+          path: release-build/freeciv-nostr-*.AppImage
+
+  macos-bundle:
+    runs-on: macos-26
+    steps:
+      - name: check out freeciv-nostr
+        uses: actions/checkout@v6.0.1
+
+      - name: install system dependencies
+        run: |
+          # Remove old python symlinks that conflict with brew
+          rm -f /usr/local/bin/2to3* /usr/local/bin/idle3* /usr/local/bin/pydoc3* /usr/local/bin/python3* 2>/dev/null || true
+          brew install \
+            meson \
+            lua@5.4 \
+            jpeg \
+            gtk4 \
+            sdl2_mixer \
+            pkg-config
+
+      - name: install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: install cbindgen
+        run: cargo install cbindgen
+
+      - name: determine version
+        id: version
+        run: |
+          FCVER="$(./fc_version)"
+          TAG="${GITHUB_REF_NAME:-${{ inputs.tag_name }}}"
+          echo "fcver=${FCVER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: build freeciv-nostr
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          GETTEXT_PREFIX="$(brew --prefix gettext)"
+          READLINE_PREFIX="$(brew --prefix readline)"
+          ICU4C_PREFIX="$(brew --prefix icu4c)"
+          SDL2_PREFIX="$(brew --prefix sdl2)"
+          SDL2_MIXER_PREFIX="$(brew --prefix sdl2_mixer)"
+
+          export CPPFLAGS="-I${GETTEXT_PREFIX}/include -I${READLINE_PREFIX}/include -I${SDL2_PREFIX}/include -I${SDL2_PREFIX}/include/SDL2 -I${SDL2_MIXER_PREFIX}/include"
+          export LDFLAGS="-L${GETTEXT_PREFIX}/lib -L${ICU4C_PREFIX}/lib -L${READLINE_PREFIX}/lib -L${SDL2_PREFIX}/lib -L${SDL2_MIXER_PREFIX}/lib"
+          export PKG_CONFIG_PATH="${ICU4C_PREFIX}/lib/pkgconfig"
+
+          INSTALL_DIR="${HOME}/freeciv-nostr-install"
+
+          mkdir build && cd build
+          meson setup .. \
+            -Dprefix="${INSTALL_DIR}" \
+            -Ddefault_library=static \
+            -Dclients=gtk4 \
+            -Dfcmp=cli \
+            -Dtools=[] \
+            -Dnostr=true
+
+          ninja
+          ninja install
+
+          # Package as tarball
+          cd "${INSTALL_DIR}"
+          tar czf "${GITHUB_WORKSPACE}/freeciv-nostr-${TAG}-macos-arm64.tar.gz" .
+
+      - name: upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-bundle
+          path: freeciv-nostr-*.tar.gz
+
+  create-release:
+    needs: [linux-appimage, macos-bundle]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: check out freeciv-nostr
+        uses: actions/checkout@v6.0.1
+
+      - name: determine tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME:-${{ inputs.tag_name }}}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: list artifacts
+        run: find artifacts -type f
+
+      - name: create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          gh release create "${TAG}" \
+            --title "freeciv-nostr ${TAG}" \
+            --generate-notes \
+            --draft \
+            artifacts/linux-appimages/*.AppImage \
+            artifacts/macos-bundle/*.tar.gz
