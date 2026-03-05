@@ -1165,6 +1165,10 @@ endforeach
 add_global_arguments('-DHAVE_CONFIG_H',
                      language: ['c', 'cpp'])
 
+if get_option('nostr')
+  add_global_arguments('-DFREECIV_NOSTR', language: 'c')
+endif
+
 if get_option('nls')
   subdir('translations/core')
   subdir('translations/nations')
@@ -1452,7 +1456,6 @@ endif
 # ---- Nostr/P2P integration (optional, requires Rust toolchain) ----
 nostr_enabled = get_option('nostr')
 if nostr_enabled
-  add_project_arguments('-DFREECIV_NOSTR', language: 'c')
   nostr_build_dir = join_paths(b_root, 'nostr')
 
   nostr_rust_target = custom_target('freeciv-nostr-ffi',
