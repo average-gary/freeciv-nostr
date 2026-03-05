@@ -26,6 +26,3 @@ rename_args = "None"
 
 [parse]
 parse_deps = false
-
-[parse.expand]
-crates = ["freeciv-nostr-ffi"]
