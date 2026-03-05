@@ -1452,6 +1452,7 @@ endif
 # ---- Nostr/P2P integration (optional, requires Rust toolchain) ----
 nostr_enabled = get_option('nostr')
 if nostr_enabled
+  add_project_arguments('-DFREECIV_NOSTR', language: 'c')
   nostr_build_dir = join_paths(b_root, 'nostr')
 
   nostr_rust_target = custom_target('freeciv-nostr-ffi',
@@ -1492,7 +1493,6 @@ if nostr_enabled
     sources: nostr_rust_target
   )
 
-  add_project_arguments('-DFREECIV_NOSTR', language: 'c')
   message('Nostr/P2P integration: ENABLED')
 else
   nostr_dep = dependency('', required: false)
