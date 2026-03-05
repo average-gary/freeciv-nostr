@@ -73,6 +73,10 @@ jobs:
 
           # --- Server AppImage ---
           mkdir -p AppDir/server build/server
+
+          # Pre-build Rust FFI library so it exists at meson configure time
+          "${SRC_ROOT}/scripts/build-rust.sh" "${BUILD_ROOT}/build/server/nostr"
+
           cd build/server
           meson setup \
             -Dappimage=true \
@@ -179,7 +183,12 @@ jobs:
 
           INSTALL_DIR="${HOME}/freeciv-nostr-install"
 
-          mkdir build && cd build
+          mkdir build
+
+          # Pre-build Rust FFI library so it exists at meson configure time
+          ./scripts/build-rust.sh build/nostr
+
+          cd build
           meson setup .. \
             -Dprefix="${INSTALL_DIR}" \
             -Ddefault_library=static \
